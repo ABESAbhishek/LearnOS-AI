@@ -1,0 +1,43 @@
+.questionTransition {
+  animation-duration: 240ms;
+  animation-fill-mode: both;
+  animation-timing-function: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.enterNext {
+  animation-name: enterFromRight;
+}
+
+.enterPrevious {
+  animation-name: enterFromLeft;
+}
+
+@keyframes enterFromRight {
+  from {
+    opacity: 0;
+    transform: translate3d(12px, 0, 0);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes enterFromLeft {
+  from {
+    opacity: 0;
+    transform: translate3d(-12px, 0, 0);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .questionTransition {
+    animation: none;
+  }
+}
