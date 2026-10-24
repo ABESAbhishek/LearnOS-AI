@@ -7,6 +7,7 @@ import { useAuth } from "@/context/auth-context";
 import { useDocuments } from "@/context/document-context";
 import { useLearning } from "@/context/learning-context";
 import { retrieveRelevantChunks } from "@/lib/document-intelligence";
+import { getRecentPracticeContext } from "@/lib/tutor-chat";
 import { getTutorChatStorageKey, loadTutorConversation, saveTutorConversation } from "@/lib/tutor-chat-persistence";
 import type { TutorChatMessage, TutorChatResponse } from "@/types/document";
 
@@ -72,7 +73,8 @@ export function FloatingAITutor() {
   const pathname = usePathname();
   const router = useRouter();
   const { documents, selectedDocumentId, setSelectedDocumentId, setFocusedSource } = useDocuments();
-  const { learningGoal, weakestTopic, knowledgeScores } = useLearning();
+  const { learningGoal, weakestTopic, knowledgeScores, evidence } = useLearning();
+  const recentPractice = useMemo(() => getRecentPracticeContext(evidence), [evidence]);
   const storageKey = useMemo(() => getTutorChatStorageKey(studentName), [studentName]);
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<TutorChatMessage[]>([]);
@@ -174,6 +176,7 @@ export function FloatingAITutor() {
           objective: learningGoal.slice(0, 240),
           weakestTopic,
           weakestMastery: knowledgeScores[weakestTopic],
+          recentPractice,
           sourceMode: activeSourceMode === "documents" && sources.length ? "documents" : "general",
           sources: activeSourceMode === "documents" && sources.length ? sources : [],
         }),
@@ -194,7 +197,7 @@ export function FloatingAITutor() {
       sendingRef.current = false;
       setSending(false);
     }
-  }, [activeSourceMode, knowledgeScores, learningGoal, messages, pathname, providerStatus, selectedDocuments, weakestTopic]);
+  }, [activeSourceMode, knowledgeScores, learningGoal, messages, pathname, providerStatus, recentPractice, selectedDocuments, weakestTopic]);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -356,7 +359,7 @@ export function FloatingAITutor() {
                 <Send aria-hidden="true" size={15} />
               </button>
             </form>
-            <p className="mt-2 px-1 text-[9px] leading-4 text-muted">Chat is saved locally for this demo account. Relevant excerpts are sent to the configured provider.</p>
+            <p className="mt-2 px-1 text-[9px] leading-4 text-muted">Chat is saved locally. Relevant excerpts and up to six recent practice outcomes are sent to the configured AI provider.</p>
           </div>
         </section>
       )}

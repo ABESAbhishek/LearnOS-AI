@@ -117,6 +117,12 @@ export interface TutorConversationState {
   messages: TutorChatMessage[];
 }
 
+export interface TutorPracticeOutcome {
+  topic: string;
+  activityType: "tutor-practice" | "note2learn-quiz";
+  outcome: "correct" | "review";
+}
+
 export interface TutorChatRequest {
   question: string;
   history: Array<{ role: "user" | "assistant"; content: string }>;
@@ -125,6 +131,7 @@ export interface TutorChatRequest {
   objective?: string;
   weakestTopic?: string;
   weakestMastery?: number;
+  recentPractice?: TutorPracticeOutcome[];
   sourceMode: "general" | "documents";
   sources: TutorSourceChunk[];
 }

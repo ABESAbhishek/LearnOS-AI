@@ -80,6 +80,11 @@ export async function POST(request: NextRequest) {
         learningObjective: body.objective,
         currentPriorityTopic: body.weakestTopic,
         masteryPercent: body.weakestMastery,
+        recentPractice: (body.recentPractice ?? []).map(({ topic, activityType, outcome }) => ({
+          topic: topic.trim().slice(0, 120),
+          activityType,
+          outcome,
+        })),
       },
       sourceMode: body.sourceMode,
       retrievedSourceRecords: body.sources.map((source) => ({

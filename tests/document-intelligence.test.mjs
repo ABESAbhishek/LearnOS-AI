@@ -4,7 +4,7 @@ import { createDocumentChunks, buildLocalKnowledgeRepresentation, evidenceIsPres
 import { loadDocumentLibrary, saveDocumentLibrary, getScopedDocumentStorageKey } from "../src/lib/document-persistence.ts";
 import { clearTutorConversation, getTutorChatStorageKey, loadTutorConversation, saveTutorConversation } from "../src/lib/tutor-chat-persistence.ts";
 import { validateDocumentUploadBatch, MAX_ANALYSIS_UPLOAD_BYTES } from "../src/lib/document-upload-validation.ts";
-import { mapTutorCitations, tutorSystemInstruction, validateTutorChatRequest, validateTutorProviderAnswer } from "../src/lib/tutor-chat.ts";
+import { getRecentPracticeContext, mapTutorCitations, tutorSystemInstruction, validateTutorChatRequest, validateTutorProviderAnswer } from "../src/lib/tutor-chat.ts";
 import { extractTextFromPDF } from "../src/lib/pdf-parser.ts";
 import { loadLearningState } from "../src/lib/learning-persistence.ts";
 
@@ -234,4 +234,36 @@ test("tutor request limits, source isolation, and provider citations are checked
   assert.equal(validateTutorChatRequest({ ...request, sources: [] }), false);
   assert.equal(validateTutorChatRequest({ ...request, history: Array.from({ length: 9 }, () => ({ role: "user", content: "question" })) }), false);
   assert.match(tutorSystemInstruction(), /untrusted data/);
+});
+
+test("tutor sends only six recent practice topics, activity types, and correct/review outcomes", () => {
+  const evidence = [
+    { kind: "assessment", topic: "Assessment only", correct: true, recordedAt: "2026-10-24T12:00:00.000Z" },
+    ...Array.from({ length: 8 }, (_, index) => ({
+      eventId: `practice-${index}`,
+      activityId: "private-activity-id",
+      questionId: "private-question-id",
+      kind: index % 2 === 0 ? "tutor-practice" : "note2learn-quiz",
+      topic: `Graphs ${index}`,
+      selectedOption: 3,
+      correct: index % 2 === 0,
+      recordedAt: new Date(Date.UTC(2026, 9, 24, 12, index)).toISOString(),
+    })),
+  ];
+  const context = getRecentPracticeContext(evidence);
+  assert.equal(context.length, 6);
+  assert.deepEqual(context[0], { topic: "Graphs 7", activityType: "note2learn-quiz", outcome: "review" });
+  assert.deepEqual(Object.keys(context[0]).sort(), ["activityType", "outcome", "topic"]);
+
+  const baseRequest = {
+    question: "Help me with graphs",
+    history: [],
+    sourceMode: "general",
+    sources: [],
+  };
+  assert.equal(validateTutorChatRequest({ ...baseRequest, recentPractice: context }), true);
+  assert.equal(validateTutorChatRequest({ ...baseRequest, recentPractice: Array(7).fill(context[0]) }), false);
+  assert.equal(validateTutorChatRequest({ ...baseRequest, recentPractice: [{ topic: "Graphs", activityType: "assessment", outcome: "correct" }] }), false);
+  assert.equal(validateTutorChatRequest({ ...baseRequest, recentPractice: [{ topic: "Graphs", activityType: "tutor-practice", outcome: "wrong" }] }), false);
+  assert.equal(validateTutorChatRequest({ ...baseRequest, recentPractice: [{ ...context[0], questionId: "must-not-leave-the-client" }] }), false);
 });
