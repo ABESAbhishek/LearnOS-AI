@@ -114,6 +114,7 @@ function getDynamicRecommendation(
 
 export function KnowledgeMapExperience() {
   const {
+    courseModel,
     topics,
     knowledgeScores,
     weakestTopic,
@@ -121,16 +122,29 @@ export function KnowledgeMapExperience() {
     currentFocus,
     currentGap,
     tutorPracticeCompleted,
+    isSampleData,
+    planAdapted,
   } = useLearning();
 
   const [userSelectedTopic, setUserSelectedTopic] = useState<string | null>(null);
 
   // Default selection to the dynamic weakest topic unless the user explicitly selected another node
-  const activeTopicName = userSelectedTopic || weakestTopic || "Graphs";
+  const activeTopicName = userSelectedTopic || weakestTopic || topics[0]?.name || "Foundations";
 
   const weakestScore = knowledgeScores[weakestTopic] ?? 31;
   const isWeakGap = weakestScore < 60;
-  const selectedLayout = NODE_LAYOUTS[activeTopicName] || NODE_LAYOUTS.Graphs;
+  const strongestTopics = [...topics].sort((first, second) => second.mastery - first.mastery).slice(0, 2);
+  const selectedCourseTopic = courseModel.topics.find((t) => t.name === activeTopicName);
+  const selectedLayout = NODE_LAYOUTS[activeTopicName] || {
+    name: activeTopicName,
+    left: "40%",
+    top: "58%",
+    category: selectedCourseTopic?.difficulty || "Intermediate",
+    description:
+      selectedCourseTopic?.subtopics.join(", ") ||
+      `${activeTopicName} core principles, concepts, and problem solving.`,
+    recommendation: `Mastery at ${knowledgeScores[activeTopicName] ?? 50}%. Continue practicing core operations for ${activeTopicName}.`,
+  };
   const selectedScore = knowledgeScores[activeTopicName] ?? 50;
   const isSelectedWeakest = activeTopicName === weakestTopic;
   const dynamicRecommendation = getDynamicRecommendation(
@@ -154,8 +168,9 @@ export function KnowledgeMapExperience() {
         </h1>
 
         <p className="mt-4 max-w-2xl text-base leading-7 text-[#5F5A54] sm:text-lg">
-          LearnOS turns your diagnostic responses and syllabus into an interactive picture
-          of what you know, where your conceptual gaps lie, and how ideas connect.
+          {isSampleData
+            ? "Seeded DSA sample values give this map a starting shape. Complete a diagnostic to replace them with your own learning signals."
+            : "LearnOS combines your diagnostic responses and syllabus into an interactive picture of what you know and where practice can help."}
         </p>
       </section>
 
@@ -186,7 +201,7 @@ export function KnowledgeMapExperience() {
           <div
             className="relative h-[340px] w-full overflow-hidden rounded-2xl border border-[var(--border)] bg-[#F8F2EA]/70 p-2 sm:h-[380px]"
             role="region"
-            aria-label="Interactive DSA topological graph"
+            aria-label={`Interactive ${courseModel.courseName} topic map`}
           >
             {/* Background Topological Connector Paths */}
             <svg
@@ -266,14 +281,31 @@ export function KnowledgeMapExperience() {
 
             {/* Rendered Nodes on the Graph */}
             {topics.map((topic, index) => {
-              const layout = NODE_LAYOUTS[topic.name] || {
-                name: topic.name,
-                left: `${index * 15}%`,
-                top: "30%",
-                category: "Intermediate",
-                description: "",
-                recommendation: "",
-              };
+              let layout = NODE_LAYOUTS[topic.name];
+              if (!layout) {
+                const total = Math.max(1, topics.length);
+                const half = Math.ceil(total / 2);
+                const row = index < half ? 0 : 1;
+                const col = row === 0 ? index : index - half;
+                const colCount = row === 0 ? half : total - half;
+                const spacing = 100 / (colCount + 1);
+                const leftPercent = Math.max(3, Math.min(72, (col + 0.5) * spacing));
+                const topPercent = row === 0 ? "8%" : "58%";
+                const cTopic = courseModel.topics.find((t) => t.name === topic.name);
+                let cat: "Foundations" | "Intermediate" | "Advanced" = row === 0 ? "Foundations" : "Intermediate";
+                if (cTopic?.difficulty === "Advanced") cat = "Advanced";
+                else if (cTopic?.difficulty === "Foundational") cat = "Foundations";
+                else if (cTopic?.difficulty === "Intermediate") cat = "Intermediate";
+
+                layout = {
+                  name: topic.name,
+                  left: `${leftPercent}%`,
+                  top: topPercent,
+                  category: cat,
+                  description: cTopic?.subtopics.join(", ") || `${topic.name} principles.`,
+                  recommendation: `Mastery at ${topic.mastery}%.`,
+                };
+              }
               const isSelected = activeTopicName === topic.name;
               const isFocus = topic.name === weakestTopic;
 
@@ -350,7 +382,7 @@ export function KnowledgeMapExperience() {
           {/* Topic Mastery List Table below the graph */}
           <div className="mt-6 border-t border-[var(--border)] pt-5">
             <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#5F5A54]">
-              Mastery Breakdown &middot; 6 Topics
+              Mastery Breakdown &middot; {topics.length} Topics
             </p>
             <div className="space-y-2">
               {topics.map((t) => {
@@ -434,10 +466,12 @@ export function KnowledgeMapExperience() {
 
               <p className="mt-4 text-xs leading-6 text-[#3F3B37]">
                 {isWeakGap
-                  ? weakestTopic === "Graphs"
-                    ? "Your strongest fundamentals are in Arrays (91%), Linked Lists (83%), and Stacks (76%). Graphs (31%) are your largest conceptual bottleneck, specifically BFS level-by-level queue traversal and recursive DFS."
-                    : `Your strongest fundamentals are in Arrays (${knowledgeScores.Arrays ?? 91}%) and Linked Lists (${knowledgeScores["Linked Lists"] ?? 83}%). ${weakestTopic} (${weakestScore}%) is currently your largest conceptual bottleneck, specifically ${currentGap}.`
-                  : `Excellent progress! Your ${weakestTopic} practice elevated your mastery to ${weakestScore}%. Your study plan has adapted to reinforce advanced concepts and application.`}
+                  ? `${isSampleData ? "Seeded sample values" : "Your current estimates"} show ${strongestTopics[0]?.name || "Foundations"} (${strongestTopics[0]?.mastery ?? 60}%) and ${strongestTopics[1]?.name || "Core"} (${strongestTopics[1]?.mastery ?? 60}%) as the strongest areas. ${weakestTopic} (${weakestScore}%) is the current lowest estimate; focus on ${currentGap}.`
+                  : planAdapted
+                    ? `Your latest learning evidence has raised every topic estimate above the focus threshold. Continue using the adapted plan to reinforce advanced concepts.`
+                    : isSampleData
+                      ? "All seeded sample estimates are at or above the focus threshold. A diagnostic will replace them with your own learning evidence."
+                      : "All current estimates are at or above the focus threshold. Continue practicing to refine the profile."}
               </p>
             </div>
 

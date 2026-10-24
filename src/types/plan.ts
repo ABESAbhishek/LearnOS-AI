@@ -25,9 +25,11 @@ export interface AdaptPlanRequest {
   currentFocus?: string;
 }
 
+import type { AISource } from "@/lib/ai/types";
+
 export interface AdaptPlanResponse {
   tasks: PlanTask[];
-  source: "gemini" | "baseline";
+  source: AISource;
   message: string;
   model?: string;
   latencyMs?: number;
@@ -76,7 +78,7 @@ export const ADAPTED_PLAN_TASKS: PlanTask[] = [
     detail: "Now that BFS traversal is solid, apply it to 2D Grid Shortest Path problems.",
     duration: "15 min",
     kind: "Focus topic",
-    done: true,
+    done: false,
   },
   {
     id: "task-adapted-2",
@@ -162,7 +164,8 @@ export function normalizePlanTasks(tasks: unknown[]): PlanTask[] {
       detail: String(t.detail || "").trim(),
       duration: durationStr,
       kind: matchedKind,
-      done: Boolean(t.done),
+    // AI output may propose content but cannot claim learner completion.
+    done: false,
     };
   });
 }

@@ -3,8 +3,10 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Menu, X, LogOut } from "lucide-react";
+import { Menu, X, LogOut, ChevronDown } from "lucide-react";
 import { useAuth } from "@/context/auth-context";
+import { useProfile } from "@/context/profile-context";
+import { AvatarMark } from "@/components/profile/avatar-mark";
 
 const authenticatedNav = [
   { name: "Overview", href: "/dashboard" },
@@ -12,8 +14,21 @@ const authenticatedNav = [
   { name: "Assessment", href: "/assessment" },
   { name: "Knowledge Map", href: "/knowledge-map" },
   { name: "AI Tutor", href: "/tutor" },
+  { name: "Note2Learn", href: "/note2learn" },
   { name: "Study Plan", href: "/plan" },
-  { name: "About", href: "/about" },
+];
+
+const secondaryNav = [
+  { name: "Daily Quests", href: "/quests" },
+  { name: "Progress", href: "/progress" },
+  { name: "Achievements", href: "/achievements" },
+  { name: "My Activity", href: "/feed" },
+  { name: "Friends", href: "/friends" },
+  { name: "Messages", href: "/messages" },
+  { name: "Study Rooms", href: "/rooms" },
+  { name: "Friend Challenges", href: "/challenges" },
+  { name: "Profile", href: "/profile" },
+  { name: "About LearnOS", href: "/about" },
 ];
 
 const guestNav = [
@@ -25,6 +40,7 @@ export default function AppNav() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
   const { isAuthenticated, studentName, logout } = useAuth();
+  const { preferences } = useProfile();
 
   const currentNav = isAuthenticated ? authenticatedNav : guestNav;
 
@@ -52,7 +68,7 @@ export default function AppNav() {
         </Link>
 
         {/* Desktop Navigation */}
-        <nav className="hidden items-center gap-1 md:flex" aria-label="Main Navigation">
+        <nav className="hidden items-center gap-0.5 xl:flex" aria-label="Main Navigation">
           {currentNav.map((item) => {
             const isActive =
               pathname === item.href ||
@@ -62,7 +78,7 @@ export default function AppNav() {
               <Link
                 key={item.href}
                 href={item.href}
-                className={`relative px-4 py-2 text-sm font-medium transition-colors duration-200 ${
+                className={`relative px-2.5 py-2 text-[13px] font-medium transition-colors duration-200 xl:px-3 ${
                   isActive
                     ? "text-[#111111]"
                     : "text-[#5F5A54] hover:text-[#111111]"
@@ -77,6 +93,17 @@ export default function AppNav() {
               </Link>
             );
           })}
+          {isAuthenticated && <details className="group relative">
+            <summary className={`interactive flex cursor-pointer list-none items-center gap-1 rounded-lg px-2.5 py-2 text-[13px] font-medium transition-colors ${secondaryNav.some((item) => pathname === item.href) ? "text-foreground" : "text-[#5F5A54] hover:text-foreground"}`}>
+              More <ChevronDown size={13} aria-hidden="true" className="transition-transform group-open:rotate-180" />
+            </summary>
+            <div className="absolute right-0 top-full z-50 mt-2 w-52 rounded-2xl border border-border bg-surface p-2 shadow-lg">
+              {secondaryNav.map((item) => {
+                const active = pathname === item.href;
+                return <Link key={item.href} href={item.href} onClick={(event) => { const details = event.currentTarget.closest("details"); if (details) details.open = false; }} className={`block rounded-lg px-3 py-2.5 text-xs transition-colors ${active ? "bg-accent-soft text-accent" : "text-muted hover:bg-background hover:text-foreground"}`} aria-current={active ? "page" : undefined}>{item.name}</Link>;
+              })}
+            </div>
+          </details>}
         </nav>
 
         {/* User & Mobile Toggle */}
@@ -100,9 +127,9 @@ export default function AppNav() {
                 </div>
               </div>
 
-              <div className="flex h-10 w-10 items-center justify-center rounded-full border border-black/15 bg-[#F8F2EA] text-sm font-medium text-[#111111]">
-                {studentName.charAt(0).toUpperCase()}
-              </div>
+              <Link href="/profile" aria-label={`Open ${studentName}'s profile`} className="interactive rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+                <AvatarMark icon={preferences.avatarIcon} color={preferences.avatarColor} />
+              </Link>
             </>
           ) : (
             <Link
@@ -117,7 +144,7 @@ export default function AppNav() {
           <button
             type="button"
             onClick={() => setMobileOpen(!mobileOpen)}
-            className="flex h-10 w-10 items-center justify-center rounded-full border border-black/15 bg-[#F8F2EA] text-[#111111] md:hidden"
+            className="flex h-10 w-10 items-center justify-center rounded-full border border-black/15 bg-[#F8F2EA] text-[#111111] xl:hidden"
             aria-label={mobileOpen ? "Close menu" : "Open menu"}
             aria-expanded={mobileOpen}
           >
@@ -128,9 +155,9 @@ export default function AppNav() {
 
       {/* Mobile Navigation Dropdown */}
       {mobileOpen && (
-        <div className="border-t border-[var(--border)] bg-[#F5EEE5] px-6 py-4 md:hidden">
-          <nav className="flex flex-col gap-1">
-            {currentNav.map((item) => {
+        <div className="border-t border-[var(--border)] bg-[#F5EEE5] px-6 py-4 xl:hidden">
+          <nav className="flex max-h-[65vh] flex-col gap-1 overflow-y-auto" aria-label="Mobile navigation">
+            {[...currentNav, ...(isAuthenticated ? secondaryNav : [])].map((item) => {
               const isActive =
                 pathname === item.href ||
                 (item.href === "/dashboard" && pathname === "/");

@@ -2,12 +2,12 @@
 
 import { useEffect, useId, useState, type CSSProperties, type DragEvent } from "react";
 import Link from "next/link";
-import { ArrowRight, Check, FileText, FolderUp, Sparkles, X, AlertCircle } from "lucide-react";
+import { ArrowRight, BookOpen, FileText, FolderUp, Sparkles, X, AlertCircle } from "lucide-react";
 import { FeatureFrame, FeatureHeading, SectionLabel } from "@/components/features/feature-frame";
 import { AnimatedNumber } from "@/components/motion/animated-number";
-import { ProgressBar } from "@/components/motion/progress-bar";
 import { useLearning } from "@/context/learning-context";
-import { BASELINE_DSA_COURSE } from "@/types/course";
+import { useDocuments } from "@/context/document-context";
+import type { DocumentKnowledgeRepresentation, DocumentSourceReference, SourceDocument } from "@/types/document";
 
 type Material = {
   id: string;
@@ -21,19 +21,16 @@ type Material = {
 type UploadStage = "upload" | "analyzing" | "results";
 
 const ANALYSIS_STEPS = [
-  "Uploading learning material",
-  "Reading document contents",
-  "Understanding syllabus outline",
-  "Mapping topics & difficulty",
-  "Building learning structure",
-  "Learning path ready",
+  "Validate file type, size, and PDF structure",
+  "Extract text while preserving page boundaries",
+  "Build a source-grounded learning outline",
 ] as const;
 
 const SAMPLE_MATERIALS: Material[] = [
-  { id: "sample-syllabus", name: "DSA_Syllabus.pdf", type: "PDF", size: "1.8 MB", isSample: true },
-  { id: "sample-pyq", name: "Previous_Year_Questions.pdf", type: "PDF", size: "2.4 MB", isSample: true },
-  { id: "sample-notes", name: "DSA_Notes.pdf", type: "PDF", size: "1.1 MB", isSample: true },
+  { id: "sample-dsa-outline", name: "Built-in DSA course outline", type: "SAMPLE", size: "local demo", isSample: true },
 ];
+const MAX_UPLOAD_FILES = 3;
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
 function formatFileSize(bytes: number) {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -51,24 +48,97 @@ function toMaterial(file: File, index: number): Material {
   };
 }
 
-function AnalysisStepList({ currentStep }: { currentStep: number }) {
+function AnalysisStepList() {
   return (
-    <ol className="ai-activity" aria-label="LearnOS material analysis">
-      {ANALYSIS_STEPS.map((label, index) => {
-        const state = index < currentStep ? "complete" : index === currentStep ? "active" : "upcoming";
-        return (
-          <li key={label} className="ai-activity__step" data-state={state} aria-current={state === "active" ? "step" : undefined}>
-            <span className="ai-activity__marker" aria-hidden="true">
-              {state === "complete" ? <Check size={13} strokeWidth={2} /> : <span />}
-            </span>
-            <span className="min-w-0">
-              <span className="mb-0.5 block text-[9px] font-semibold uppercase tracking-[0.14em] text-muted">Step 0{index + 1}</span>
-              <span className="ai-activity__label block">{label}</span>
-            </span>
-          </li>
-        );
-      })}
+    <ol className="grid gap-3" aria-label="Document processing stages">
+      {ANALYSIS_STEPS.map((label, index) => (
+        <li key={label} className="flex items-start gap-3 rounded-xl border border-border/75 bg-white/20 px-3 py-3">
+          <span className="grid size-6 shrink-0 place-items-center rounded-full border border-border font-mono text-[9px] text-accent" aria-hidden="true">0{index + 1}</span>
+          <span className="text-xs leading-5 text-foreground">{label}</span>
+        </li>
+      ))}
     </ol>
+  );
+}
+
+function SavedSourceLibrary({
+  documents,
+  focusedSource,
+  storageError,
+  onRemove,
+  onFocus,
+}: {
+  documents: SourceDocument[];
+  focusedSource: { documentId: string; pageNumber: number | null } | null;
+  storageError: boolean;
+  onRemove: (id: string) => void;
+  onFocus: (id: string) => void;
+}) {
+  if (!documents.length) return null;
+  return (
+    <section id="library" aria-labelledby="saved-source-title" className="panel motion-reveal motion-reveal--section p-5 sm:p-7" data-motion-reveal>
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <SectionLabel>Browser library / {String(documents.length).padStart(2, "0")}</SectionLabel>
+          <h2 id="saved-source-title" className="mt-2 text-xl font-medium tracking-[-0.04em]">Your extracted sources.</h2>
+          <p className="mt-1 text-xs leading-5 text-muted">Original files are not retained. The extracted text below stays in this browser and can be removed at any time.</p>
+        </div>
+        {storageError && <span role="status" className="text-[11px] text-amber-700">Browser storage is full; some text may not persist after you leave.</span>}
+      </div>
+      <div className="grid gap-2">
+        {documents.map((document) => {
+          const focused = focusedSource?.documentId === document.id;
+          const page = focused && focusedSource?.pageNumber !== null
+            ? document.pages.find((item) => item.pageNumber === focusedSource?.pageNumber)
+            : document.pages[0];
+          return (
+            <article key={document.id} id={`source-${document.id}`} className="flex items-start gap-2 rounded-xl border border-border bg-white/25 p-2">
+              <details open={focused} className="group min-w-0 flex-1">
+                <summary className="flex cursor-pointer list-none items-center gap-3 px-1.5 py-1">
+                  <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent-soft text-accent"><BookOpen aria-hidden="true" size={15} /></span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium">{document.title || document.name}</span>
+                    <span className="mt-0.5 block text-[10px] text-muted">{document.name} · {document.pageCount ? `${document.pageCount} PDF pages` : "Text document"}{document.truncated ? " · extraction bounded" : ""}</span>
+                  </span>
+                </summary>
+                {page ? (
+                  <div className="mt-2 border-t border-border/70 px-2 py-3">
+                    <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">{page.pageNumber ? `Page ${page.pageNumber}` : "Extracted text passage"}</p>
+                    <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words font-sans text-xs leading-5 text-foreground">{page.text}</pre>
+                    {document.warnings.length > 0 && <p className="mt-2 text-[10px] leading-4 text-muted">{document.warnings.join(" ")}</p>}
+                    {!focused && document.pages.length > 1 && <p className="mt-2 text-[10px] text-muted">Open a tutor citation to view its exact page.</p>}
+                    <button type="button" onClick={() => onFocus(document.id)} className="interactive mt-2 text-[10px] font-medium text-accent hover:underline">Use this source in the floating tutor</button>
+                  </div>
+                ) : <p className="mt-2 border-t border-border/70 p-3 text-xs text-muted">No extracted text is available for this source.</p>}
+              </details>
+              <button type="button" onClick={() => onRemove(document.id)} aria-label={`Remove ${document.name} from this browser`} className="interactive mt-1 grid size-8 shrink-0 place-items-center rounded-lg text-muted hover:bg-background hover:text-foreground">
+                <X aria-hidden="true" size={14} />
+              </button>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function SourceReferenceButton({
+  source,
+  documents,
+  onOpen,
+}: {
+  source: DocumentSourceReference;
+  documents: SourceDocument[];
+  onOpen: (documentId: string, pageNumber: number | null) => void;
+}) {
+  const name = documents.find((document) => document.id === source.documentId)?.name ?? "Source document";
+  const pageLabel = source.pageStart
+    ? source.pageEnd && source.pageEnd !== source.pageStart ? ` · pp. ${source.pageStart}–${source.pageEnd}` : ` · p. ${source.pageStart}`
+    : " · text";
+  return (
+    <button type="button" onClick={() => onOpen(source.documentId, source.pageStart ?? null)} className="interactive mt-2 inline-flex max-w-full items-center gap-1 text-left text-[10px] font-medium text-accent hover:underline">
+      <span className="truncate">{name}{pageLabel}</span>
+    </button>
   );
 }
 
@@ -77,23 +147,20 @@ export function UploadExperience() {
   const [materials, setMaterials] = useState<Material[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [stage, setStage] = useState<UploadStage>("upload");
-  const [analysisStep, setAnalysisStep] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [documentKnowledge, setDocumentKnowledge] = useState<DocumentKnowledgeRepresentation | null>(null);
 
-  const { courseModel, analysisSource, setCourseAnalysis } = useLearning();
+  const { courseModel, analysisSource, learningGoal, setLearningGoal, setCourseAnalysis } = useLearning();
+  const { documents, addDocuments, removeDocument, documentsError, focusedSource, setFocusedSource, setSelectedDocumentId } = useDocuments();
 
-  useEffect(() => {
-    if (stage !== "analyzing") return;
-    const delay = analysisStep === ANALYSIS_STEPS.length - 1 ? 900 : 640;
-    const timer = window.setTimeout(() => {
-      if (analysisStep === ANALYSIS_STEPS.length - 1) {
-        setStage("results");
-      } else {
-        setAnalysisStep((step) => step + 1);
-      }
-    }, delay);
-    return () => window.clearTimeout(timer);
-  }, [analysisStep, stage]);
+  function focusDocumentSource(documentId: string, pageNumber: number | null) {
+    setSelectedDocumentId(documentId);
+    setFocusedSource({ documentId, pageNumber });
+    window.setTimeout(() => window.document.getElementById("library")?.scrollIntoView({
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+      block: "start",
+    }), 0);
+  }
 
   useEffect(() => {
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -123,7 +190,18 @@ export function UploadExperience() {
     }
 
     if (validFiles.length > 0) {
-      setMaterials((current) => [...current, ...validFiles.map(toMaterial)]);
+      const existing = materials.filter((material) => material.file);
+      const incoming = validFiles.filter((file) => !existing.some((item) => item.file?.name === file.name && item.file.lastModified === file.lastModified && item.file.size === file.size));
+      const nextFiles = [...existing, ...incoming.map((file, index) => toMaterial(file, existing.length + index))];
+      if (nextFiles.length > MAX_UPLOAD_FILES) {
+        setUploadError(`Choose up to ${MAX_UPLOAD_FILES} files per analysis.`);
+        return;
+      }
+      if (nextFiles.reduce((total, material) => total + (material.file?.size || 0), 0) > MAX_UPLOAD_BYTES) {
+        setUploadError("The combined file size must be 10 MB or less.");
+        return;
+      }
+      setMaterials(nextFiles);
     }
   }
 
@@ -138,19 +216,20 @@ export function UploadExperience() {
   }
 
   async function startAnalysis() {
-    if (materials.length === 0) return;
+    if (materials.length === 0 || stage === "analyzing") return;
     setUploadError(null);
-    setAnalysisStep(0);
     setStage("analyzing");
 
     // Initiate real server analysis
     try {
-      const fileMaterial = materials.find((m) => m.file);
+      const fileMaterials = materials.filter((material) => material.file);
       let response: Response;
 
-      if (fileMaterial && fileMaterial.file) {
+      if (fileMaterials.length > 0) {
         const formData = new FormData();
-        formData.append("file", fileMaterial.file);
+        fileMaterials.forEach((material) => {
+          if (material.file) formData.append("files", material.file);
+        });
         response = await fetch("/api/analyze-syllabus", {
           method: "POST",
           body: formData,
@@ -166,33 +245,35 @@ export function UploadExperience() {
 
       if (response.ok) {
         const data = await response.json();
+        if (!data || !data.courseModel || !Array.isArray(data.courseModel.topics)) {
+          setUploadError("LearnOS could not read a course structure from those files. Your current profile is unchanged.");
+          setStage("upload");
+          return;
+        }
+        setDocumentKnowledge(data.knowledge ?? data.data?.documentKnowledge ?? null);
+        if (Array.isArray(data.documents) && data.documents.length > 0) addDocuments(data.documents);
         setCourseAnalysis({
           courseModel: data.courseModel,
           source: data.source,
           materialsCount: materials.length,
+          learningGoal,
+          isSampleData: materials.every((material) => material.isSample),
           error: data.error,
         });
+        setStage("results");
       } else {
         const errData = await response.json().catch(() => ({}));
-        setCourseAnalysis({
-          courseModel: BASELINE_DSA_COURSE,
-          source: "baseline",
-          materialsCount: materials.length,
-          error: errData.error || "Analysis service unavailable. Active baseline loaded.",
-        });
+        setUploadError(errData.error || "Analysis service unavailable. Your current profile is unchanged.");
+        setStage("upload");
       }
     } catch {
-      setCourseAnalysis({
-        courseModel: BASELINE_DSA_COURSE,
-        source: "baseline",
-        materialsCount: materials.length,
-        error: "Network error during analysis. Active baseline loaded.",
-      });
+      setUploadError("Network error during analysis. Your current profile is unchanged.");
+      setStage("upload");
     }
   }
 
   function returnToUpload() {
-    setAnalysisStep(0);
+    setDocumentKnowledge(null);
     setStage("upload");
   }
 
@@ -206,15 +287,15 @@ export function UploadExperience() {
           : "Upload your syllabus, notes, or curriculum documents. LearnOS will turn them into a structured learning map."}
         aside={
           <span className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs text-muted">
-            {stage === "results" && analysisSource === "gemini" ? (
+            {stage === "results" && analysisSource !== "baseline" ? (
               <>
                 <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="text-foreground font-medium">Gemini 3.8 Flash</span>
+                <span className="text-foreground font-medium">AI generated</span>
               </>
             ) : (
               <>
                 <span className="size-1.5 rounded-full bg-accent" />
-                <span>DSA Workspace</span>
+                <span>{stage === "results" ? courseModel.courseName : "Curriculum Workspace"}</span>
               </>
             )}
           </span>
@@ -222,6 +303,7 @@ export function UploadExperience() {
       />
 
       {stage === "upload" && (
+        <>
         <div className="grid items-start gap-5 lg:grid-cols-[1.12fr_0.88fr]">
           <section className="panel motion-reveal motion-reveal--card p-5 sm:p-8" data-motion-reveal>
             <div className="mb-6 flex items-center justify-between gap-4">
@@ -231,6 +313,16 @@ export function UploadExperience() {
               </div>
               <FileText aria-hidden="true" className="text-muted" size={19} strokeWidth={1.6} />
             </div>
+
+            <label htmlFor={`${inputId}-goal`} className="mb-2 block text-[10px] font-semibold uppercase tracking-[0.14em] text-muted">Learning goal <span className="font-normal normal-case tracking-normal">(optional)</span></label>
+            <input
+              id={`${inputId}-goal`}
+              value={learningGoal}
+              onChange={(event) => setLearningGoal(event.target.value)}
+              maxLength={500}
+              placeholder="e.g. Prepare for my data structures exam in 3 weeks"
+              className="mb-5 min-h-11 w-full rounded-xl border border-border bg-white/45 px-3.5 text-sm outline-none transition focus:border-accent"
+            />
 
             {uploadError && (
               <div className="mb-4 flex items-center gap-2.5 rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-600 dark:text-red-400">
@@ -263,7 +355,7 @@ export function UploadExperience() {
                 <FolderUp aria-hidden="true" size={21} strokeWidth={1.6} />
               </span>
               <span className="mt-5 text-base font-medium tracking-[-0.02em]">Drop your learning material here</span>
-              <span className="mt-1.5 text-xs text-muted">PDF or TXT documents</span>
+              <span className="mt-1.5 text-xs text-muted">Up to {MAX_UPLOAD_FILES} PDF or TXT documents · 10 MB total</span>
               <span className="mt-4 inline-flex items-center gap-1 text-xs font-medium text-accent underline decoration-accent/30 underline-offset-4">or browse files</span>
             </label>
 
@@ -321,7 +413,7 @@ export function UploadExperience() {
                 }}
                 className="interactive mt-4 text-xs text-muted underline decoration-border underline-offset-4 hover:text-accent"
               >
-                Or try the DSA sample materials
+                Or open the built-in DSA sample outline
               </button>
             )}
           </section>
@@ -348,9 +440,17 @@ export function UploadExperience() {
                 </li>
               ))}
             </ol>
-            <p className="mt-1 border-t border-border pt-4 text-[11px] leading-5 text-muted">Powered by Gemini 3.8 Flash structured syllabus reasoning with deterministic baseline fallback.</p>
+            <p className="mt-1 border-t border-border pt-4 text-[11px] leading-5 text-muted">Original files are processed for extraction, then discarded. Extracted text is saved in this browser for source-grounded tutoring; bounded excerpts are sent to the configured provider when you ask a question. Provider keys stay on the server.</p>
           </aside>
         </div>
+        <SavedSourceLibrary
+          documents={documents}
+          focusedSource={focusedSource}
+          storageError={documentsError}
+          onRemove={removeDocument}
+          onFocus={(id) => { setSelectedDocumentId(id); setFocusedSource({ documentId: id, pageNumber: documents.find((document) => document.id === id)?.pages[0]?.pageNumber ?? null }); }}
+        />
+        </>
       )}
 
       {stage === "analyzing" && (
@@ -360,47 +460,48 @@ export function UploadExperience() {
               <div className="flex items-center gap-3">
                 <span className="grid size-10 place-items-center rounded-xl bg-accent-soft text-accent"><Sparkles aria-hidden="true" size={18} /></span>
                 <div>
-                  <span className="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-accent"><span className="ai-pulse size-1.5 rounded-full bg-accent" /> LearnOS is understanding your course</span>
+                  <span className="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-accent"><span className="ai-pulse size-1.5 rounded-full bg-accent" /> LearnOS is processing your material</span>
                   <p className="mt-1 text-xs text-muted">{materials.length} {materials.length === 1 ? "document" : "documents"} in this analysis</p>
                 </div>
               </div>
-              <span className="font-mono text-xs text-muted">0{analysisStep + 1} <span className="text-border">/</span> 06</span>
             </div>
-            <div className="mt-7"><ProgressBar value={((analysisStep + 1) / ANALYSIS_STEPS.length) * 100} label="Material analysis progress" className="h-1.5" /></div>
             <div className="mt-7 grid gap-7 md:grid-cols-[0.9fr_1.1fr] md:gap-12">
               <div>
                 <SectionLabel>Raw material / Analysis / Structure</SectionLabel>
-                <h2 className="mt-4 text-3xl font-medium leading-tight tracking-[-0.05em] sm:text-4xl">A course outline is becoming a map.</h2>
-                <p className="mt-3 text-sm leading-6 text-muted">LearnOS is connecting your syllabus topics with prerequisites and difficulty structures.</p>
+                <h2 className="mt-4 text-3xl font-medium leading-tight tracking-[-0.05em] sm:text-4xl">Reading the source before building the map.</h2>
+                <p className="mt-3 text-sm leading-6 text-muted">Extraction and provider analysis run in one bounded request. This screen stays in a processing state until the server returns a result.</p>
               </div>
-              <AnalysisStepList currentStep={analysisStep} />
+              <AnalysisStepList />
             </div>
-            <p className="sr-only" aria-live="polite" aria-atomic="true">Step 0{analysisStep + 1}: {ANALYSIS_STEPS[analysisStep]}</p>
+            <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">Processing the selected learning material.</p>
             <div className="mt-7 flex items-center gap-2 border-t border-border pt-4 text-xs text-muted">
               <span className="ai-pulse size-1.5 rounded-full bg-accent" />
-              <span>Analyzing curriculum with LearnOS AI pipeline</span>
+              <span>File extraction · page mapping · source-grounded analysis</span>
             </div>
           </div>
         </section>
       )}
 
       {stage === "results" && (
+        <>
         <div className="grid gap-8">
           <section aria-label="Structured learning results" className="motion-reveal motion-reveal--section" data-motion-reveal>
             <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
               <div>
                 <SectionLabel>Structured learning / Ready</SectionLabel>
                 <p className="mt-2 text-sm text-muted">
-                  LearnOS structured <span className="font-medium text-foreground">{courseModel.courseName}</span> across {materials.length} {materials.length === 1 ? "document" : "documents"}.
+                  {documentKnowledge?.analysisMode === "local-outline"
+                    ? <>Text extraction finished for <span className="font-medium text-foreground">{courseModel.courseName}</span>. The local outline contains explicit headings only.</>
+                    : <>LearnOS structured <span className="font-medium text-foreground">{courseModel.courseName}</span> across {materials.length} {materials.length === 1 ? "document" : "documents"}.</>}
                 </p>
               </div>
               <button type="button" onClick={returnToUpload} className="interactive text-xs font-medium text-accent hover:text-foreground">Upload another syllabus</button>
             </div>
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
               {[
-                { value: courseModel.totalTopics, label: "Topics identified" },
-                { value: courseModel.totalSubtopics, label: "Concepts & subtopics" },
-                { value: courseModel.highPriorityCount, label: "High-priority areas" },
+                { value: courseModel.totalTopics, label: documentKnowledge?.analysisMode === "local-outline" ? "Headings detected" : "Topics identified" },
+                { value: courseModel.totalSubtopics, label: documentKnowledge?.analysisMode === "local-outline" ? "Subtopics analyzed" : "Concepts & subtopics" },
+                { value: courseModel.highPriorityCount, label: documentKnowledge?.analysisMode === "local-outline" ? "Priority estimates" : "High-priority areas" },
                 { value: materials.length, label: materials.length === 1 ? "Material processed" : "Materials processed" },
               ].map((metric, index) => (
                 <article key={metric.label} className="panel motion-reveal motion-reveal--stat p-4 sm:p-5" data-motion-reveal style={{ "--reveal-delay": `${index * 70}ms` } as CSSProperties}>
@@ -414,58 +515,180 @@ export function UploadExperience() {
           <section aria-labelledby="topic-preview-title" className="panel motion-reveal motion-reveal--section p-5 sm:p-7" data-motion-reveal>
             <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
               <div>
-                <SectionLabel>Topic preview / {courseModel.courseName}</SectionLabel>
+                <SectionLabel>{documentKnowledge?.analysisMode === "local-outline" ? "Detected headings" : "Topic preview"} / {courseModel.courseName}</SectionLabel>
                 <h2 id="topic-preview-title" className="mt-2 text-xl font-medium tracking-[-0.04em]">A syllabus with structured signals.</h2>
               </div>
-              <span className="text-xs text-muted">Difficulty · importance · logical study order</span>
+              <span className="text-xs text-muted">{documentKnowledge?.analysisMode === "local-outline" ? "Difficulty, prerequisites, and exam weight were not estimated." : "Difficulty · importance · logical study order"}</span>
             </div>
             <ul className="motion-stagger grid gap-2 sm:grid-cols-2 xl:grid-cols-3" aria-label="Analyzed curriculum topics">
               {courseModel.topics.map((topic, index) => (
                 <li
                   key={topic.name}
-                  className="motion-reveal motion-reveal--plan-item flex flex-col rounded-xl border border-border bg-white/25 px-4 py-3"
+                  className="motion-reveal motion-reveal--plan-item rounded-xl border border-border bg-white/25 transition hover:border-accent/35 hover:bg-accent-soft/20"
                   data-motion-reveal
                   style={{ "--reveal-delay": `${index * 45}ms` } as CSSProperties}
                 >
+                  <Link
+                    href={`/tutor?topic=${encodeURIComponent(topic.name)}`}
+                    onClick={() => {
+                      const source = documentKnowledge?.topics.find((item) => item.name.toLowerCase() === topic.name.toLowerCase())?.sources[0];
+                      if (source) {
+                        setSelectedDocumentId(source.documentId);
+                        setFocusedSource({ documentId: source.documentId, pageNumber: source.pageStart ?? null });
+                      }
+                    }}
+                    className="flex h-full flex-col p-4 outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset"
+                    aria-label={`Open a focused LearnOS lesson about ${topic.name}`}
+                  >
                   <span className="flex items-center justify-between gap-3">
                     <span className="text-sm font-medium">{topic.name}</span>
                     <span
                       className={`rounded-md px-2 py-1 text-[9px] font-medium ${
-                        topic.importance === "High"
+                        documentKnowledge?.analysisMode === "local-outline"
+                          ? "bg-background text-muted"
+                          : topic.importance === "High"
                           ? "bg-accent-soft text-accent"
                           : "bg-background text-muted"
                       }`}
                     >
-                      {topic.importance} priority
+                      {documentKnowledge?.analysisMode === "local-outline" ? "Detected" : `${topic.importance} priority`}
                     </span>
                   </span>
                   <span className="mt-2 text-[11px] text-muted line-clamp-1">
-                    {topic.subtopics.slice(0, 3).join(" · ")}
+                    {topic.subtopics.length ? topic.subtopics.slice(0, 3).join(" · ") : documentKnowledge?.analysisMode === "local-outline" ? "No subtopics inferred" : ""}
                   </span>
                   <span className="mt-3 flex items-center justify-between gap-3 border-t border-border/70 pt-2.5 text-[10px] text-muted">
-                    <span>{topic.difficulty}</span>
+                    <span>{documentKnowledge?.analysisMode === "local-outline" ? "Not assessed" : topic.difficulty}</span>
                     <span>
-                      {topic.prerequisites.length > 0
+                      {documentKnowledge?.analysisMode === "local-outline"
+                        ? `Source order #${topic.studyOrder}`
+                        : topic.prerequisites.length > 0
                         ? `Req: ${topic.prerequisites[0]}`
                         : `Order #${topic.studyOrder}`}
                     </span>
                   </span>
+                  <span className="mt-2 text-[10px] font-medium text-accent">Open focused lesson →</span>
+                  </Link>
                 </li>
               ))}
             </ul>
           </section>
 
+          {documentKnowledge && (
+            <section aria-labelledby="document-intelligence-title" className="panel motion-reveal motion-reveal--section p-5 sm:p-7" data-motion-reveal>
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="max-w-3xl">
+                  <SectionLabel>Document intelligence / {documentKnowledge.analysisMode === "provider" ? "Source checked" : "Local outline"}</SectionLabel>
+                  <h2 id="document-intelligence-title" className="mt-2 text-xl font-medium tracking-[-0.04em]">{documentKnowledge.title}</h2>
+                  <p className="mt-2 text-sm leading-6 text-muted">{documentKnowledge.summary}</p>
+                </div>
+                <span className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-[10px] text-muted">
+                  <span className={`size-1.5 rounded-full ${documentKnowledge.analysisMode === "provider" ? "bg-accent" : "bg-amber-600"}`} />
+                  {documentKnowledge.analysisMode === "provider" ? `Validated with ${analysisSource}` : "Heading extraction only"}
+                </span>
+              </div>
+
+              {documentKnowledge.warnings.length > 0 && (
+                <ul className="mt-4 grid gap-1.5 rounded-xl border border-amber-700/15 bg-amber-500/5 p-3 text-[11px] leading-5 text-muted" aria-label="Analysis limitations">
+                  {documentKnowledge.warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}
+                </ul>
+              )}
+
+              {documentKnowledge.analysisMode === "provider" && documentKnowledge.topics.length > 0 && (
+                <div className="mt-5">
+                  <SectionLabel>Topics, relationships, and source pages</SectionLabel>
+                  <ul className="mt-2 grid gap-2 sm:grid-cols-2">
+                    {documentKnowledge.topics.map((topic, index) => (
+                      <li key={`${topic.name}-${index}`} className="rounded-xl border border-border/80 bg-white/20 p-3">
+                        <h3 className="text-xs font-semibold">{topic.name}</h3>
+                        {topic.subtopics.length > 0 && <p className="mt-1 text-[11px] leading-5 text-muted">{topic.subtopics.join(" · ")}</p>}
+                        {topic.prerequisites.length > 0 && <p className="mt-2 text-[10px] text-muted">Prerequisites: {topic.prerequisites.join(" · ")}</p>}
+                        <SourceReferenceButton source={topic.sources[0]} documents={documents} onOpen={focusDocumentSource} />
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {documentKnowledge.analysisMode === "provider" && documentKnowledge.keyConcepts.length > 0 && (
+                <div className="mt-5">
+                  <SectionLabel>Key concepts grounded in the source</SectionLabel>
+                  <ul className="mt-2 flex flex-wrap gap-2">
+                    {documentKnowledge.keyConcepts.map((concept, index) => (
+                      <li key={`${concept.name}-${index}`} className="rounded-lg border border-border bg-background/60 px-3 py-2 text-xs">
+                        <span>{concept.name}</span>
+                        <SourceReferenceButton source={concept.source} documents={documents} onOpen={focusDocumentSource} />
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {documentKnowledge.definitions.length > 0 && (
+                <div className="mt-5 grid gap-2 sm:grid-cols-2">
+                  {documentKnowledge.definitions.slice(0, 8).map((definition, index) => (
+                    <article key={`${definition.term}-${index}`} className="rounded-xl border border-border/80 bg-white/20 p-3">
+                      <h3 className="text-xs font-semibold">{definition.term}</h3>
+                      <p className="mt-1 text-xs leading-5 text-muted">{definition.definition}</p>
+                      <SourceReferenceButton source={definition.source} documents={documents} onOpen={focusDocumentSource} />
+                    </article>
+                  ))}
+                </div>
+              )}
+
+              {(documentKnowledge.formulas.length > 0 || documentKnowledge.examples.length > 0 || documentKnowledge.practiceQuestions.length > 0) && (
+                <div className="mt-5 grid gap-3 lg:grid-cols-2">
+                  {documentKnowledge.formulas.slice(0, 6).map((formula, index) => (
+                    <article key={`${formula.name}-${index}`} className="rounded-xl border border-border/80 bg-white/20 p-3">
+                      <h3 className="text-xs font-semibold">{formula.name}</h3>
+                      <p className="mt-2 rounded-lg bg-background/65 px-3 py-2 font-mono text-xs">{formula.formula}</p>
+                      <p className="mt-2 text-xs leading-5 text-muted">{formula.explanation}</p>
+                      <SourceReferenceButton source={formula.source} documents={documents} onOpen={focusDocumentSource} />
+                    </article>
+                  ))}
+                  {documentKnowledge.examples.slice(0, 6).map((example, index) => (
+                    <article key={`${example.title}-${index}`} className="rounded-xl border border-border/80 bg-white/20 p-3">
+                      <h3 className="text-xs font-semibold">{example.title}</h3>
+                      <p className="mt-2 text-xs leading-5 text-muted">{example.description}</p>
+                      <SourceReferenceButton source={example.source} documents={documents} onOpen={focusDocumentSource} />
+                    </article>
+                  ))}
+                  {documentKnowledge.practiceQuestions.slice(0, 6).map((question, index) => (
+                    <article key={`${question.prompt}-${index}`} className="rounded-xl border border-border/80 bg-white/20 p-3">
+                      <h3 className="text-xs font-semibold">Practice from your source</h3>
+                      <p className="mt-2 text-xs leading-5">{question.prompt}</p>
+                      <details className="mt-2 rounded-lg border border-border/70 bg-background/50 px-3 py-2 text-xs">
+                        <summary className="interactive cursor-pointer font-medium text-accent">Reveal answer and explanation</summary>
+                        <p className="mt-2 font-medium">{question.answer}</p>
+                        <p className="mt-1 leading-5 text-muted">{question.explanation}</p>
+                      </details>
+                      <SourceReferenceButton source={question.source} documents={documents} onOpen={focusDocumentSource} />
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+
           <section className="panel motion-reveal motion-reveal--card flex flex-col gap-5 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-7" data-motion-reveal>
             <div className="max-w-xl">
               <SectionLabel>02 / Assess</SectionLabel>
-              <h2 className="mt-2 text-2xl font-medium tracking-[-0.045em]">Your syllabus is understood.</h2>
-              <p className="mt-2 text-sm leading-6 text-muted">Next, let&apos;s find out what you already know with a diagnostic assessment.</p>
+              <h2 className="mt-2 text-2xl font-medium tracking-[-0.045em]">Your materials have a starting structure.</h2>
+              <p className="mt-2 text-sm leading-6 text-muted">Next, check what you already understand with a diagnostic assessment. Topics also open a focused tutor lesson.</p>
             </div>
             <Link href="/assessment" className="button-primary interactive inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-foreground px-4 text-sm font-medium text-background hover:bg-accent">
               Start Diagnostic Assessment <ArrowRight aria-hidden="true" size={15} />
             </Link>
           </section>
         </div>
+        <SavedSourceLibrary
+          documents={documents}
+          focusedSource={focusedSource}
+          storageError={documentsError}
+          onRemove={removeDocument}
+          onFocus={(id) => { setSelectedDocumentId(id); setFocusedSource({ documentId: id, pageNumber: documents.find((document) => document.id === id)?.pages[0]?.pageNumber ?? null }); }}
+        />
+        </>
       )}
     </FeatureFrame>
   );

@@ -26,9 +26,11 @@ export interface TutorExplainRequest {
   useSample?: boolean;
 }
 
+import type { AISource } from "@/lib/ai/types";
+
 export interface TutorExplainResponse {
   explanation: TutorExplanation;
-  source: "gemini" | "baseline";
+  source: AISource;
   message: string;
   model?: string;
   latencyMs?: number;
@@ -173,8 +175,37 @@ export function getFallbackTutorExplanation(topic?: string): TutorExplanation {
     };
   }
 
-  // Default canonical: Graph Traversal / BFS
-  return CANONICAL_TUTOR_EXPLANATION;
+  if (norm.includes("graph")) {
+    return { ...CANONICAL_TUTOR_EXPLANATION, topic: topic?.trim() || "Graph Traversal" };
+  }
+
+  const topicName = topic?.trim().slice(0, 120) || "the current topic";
+  return {
+    topic: topicName,
+    intuition: `Build a concrete example for ${topicName}, state the rule you are using, and check that each step follows from the previous one.`,
+    keyPoints: [
+      `Define the central idea in ${topicName} using your own words.`,
+      "Connect each important term to an example from the supplied course material.",
+      "Check the conditions and edge cases before applying a rule.",
+      "Explain why the result follows, rather than memorizing the final answer.",
+    ],
+    visualSteps: [
+      { title: "Choose an example", description: `Pick a small example that uses one idea from ${topicName}.` },
+      { title: "State the rule", description: "Identify the definition, condition, or relationship you are applying." },
+      { title: "Trace each step", description: "Apply the rule carefully and record how the example changes." },
+      { title: "Check the result", description: "Test the result against the original conditions and explain why it makes sense." },
+    ],
+    practiceQuestion: {
+      prompt: `Which action best checks your understanding of ${topicName}?`,
+      options: [
+        "Apply a core idea to a new example and explain why it works",
+        "Memorize the topic name without using an example",
+        "Skip the assumptions and focus only on the final result",
+        "Repeat a solution without checking its conditions",
+      ],
+      correctOption: 0,
+    },
+  };
 }
 
 /**

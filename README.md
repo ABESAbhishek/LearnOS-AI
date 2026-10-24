@@ -1,344 +1,70 @@
-# LearnOS AI 🧠
+# LearnOS AI
 
-### Adaptive AI-Powered Learning Platform
+LearnOS AI is a personalized learning prototype built around the loop **Assess → Learn → Practice → Analyze → Adapt**. The current demo uses a DSA profile while also allowing a syllabus upload to define a different course map.
 
-LearnOS AI is an adaptive learning platform designed to understand **what a student needs to learn, where they are struggling, and what they should study next**.
+## Product areas
 
-Instead of providing the same learning path to every student, LearnOS builds a continuous learning loop:
+- `/dashboard` — overview, current focus, progress, and milestones
+- `/upload` — page-aware PDF/TXT extraction and syllabus analysis; up to three files, 10 MB combined
+- `/assessment` — an eight-question diagnostic with bounded, provisional topic estimates
+- `/knowledge-map` — topic mastery and learning gaps
+- `/tutor` — targeted explanations, guided steps, and practice; a floating tutor is available across signed-in app routes
+- `/plan` — an adaptive four-task study sequence
+- `/note2learn` — turn one PDF/TXT note (up to 5 MB) into a summary, flashcards, and a short quiz
+- `/quests` — daily goals derived from saved answers and completed quizzes
+- `/progress` — evidence-backed estimates, assessment history, and activity totals
+- `/achievements` — earned badges and explicit unlock criteria
+- `/profile` — local avatar customization, interests, and learning goal
+- `/feed` — a private timeline of this learner's saved activity
+- `/friends`, `/messages`, `/rooms`, `/challenges` — honest setup states for features that require shared identity and storage
 
-**Syllabus → Assessment → Knowledge Map → AI Tutor → Practice → Adaptive Study Plan**
+Each route is a dedicated experience. The routes share the LearnOS cream palette, typography, navigation, and motion system.
 
----
+The dashboard's story strip is built from the learner's actual saved activity and opens an accessible story viewer. The companion card provides deterministic guidance from the current learning profile; it is not a live chat agent. There are no simulated friends, public posts, or shared rooms.
 
-## 🚀 What is LearnOS?
+## Run locally
 
-LearnOS combines AI-powered analysis with a student's learning performance to create a personalized learning experience.
+Use Node.js 20.9 or newer for Next.js. The built-in test command uses Node.js 22.6 or newer for TypeScript stripping.
 
-The platform can:
-
-* Analyze a student's syllabus and learning material
-* Identify important topics and learning priorities
-* Diagnose knowledge gaps through assessments
-* Visualize topic mastery through an interactive Knowledge Map
-* Provide personalized AI tutoring
-* Track improvement through practice
-* Automatically adapt the student's study plan
-
-The goal is simple:
-
-> **Don't just tell students what to study. Understand what they need to learn next.**
-
----
-
-## ✨ Core Features
-
-### 🔐 Student Login
-
-A dedicated student entry point allows learners to access the platform through a simple login experience.
-
-The application separates authentication state from learning state, allowing the learning engine to operate independently from the login system.
-
----
-
-### 📚 AI Syllabus Analysis
-
-Students can upload their syllabus or learning material.
-
-LearnOS analyzes the material and extracts:
-
-* Topics
-* Difficulty
-* Priority
-* Frequency
-* Important concepts
-* Learning areas
-
-The system can use AI-powered analysis while maintaining a deterministic fallback for reliability.
-
----
-
-### 📝 Diagnostic Assessment
-
-LearnOS generates or uses diagnostic questions to determine the student's current understanding.
-
-The assessment evaluates topic-level performance and identifies areas that require additional attention.
-
----
-
-### 🗺️ Interactive Knowledge Map
-
-The Knowledge Map provides a visual representation of the student's learning profile.
-
-Example DSA knowledge profile:
-
-| Topic        | Mastery |
-| ------------ | ------: |
-| Arrays       |     91% |
-| Linked Lists |     83% |
-| Stacks       |     76% |
-| Trees        |     58% |
-| Hashing      |     47% |
-| Graphs       |     31% |
-
-The system can identify a topic such as **Graph Traversal** as a priority gap and guide the student toward targeted learning.
-
----
-
-### 🤖 AI Tutor
-
-The AI Tutor provides a staged learning experience:
-
-**01 — Intuition**
-
-Build an intuitive understanding of the concept.
-
-**02 — Visual**
-
-Interact with a visual example and step through the concept.
-
-**03 — Practice**
-
-Apply the concept through an interactive question.
-
-For example, the current demonstration teaches **Breadth-First Search (BFS)** using graph traversal and queue states.
-
----
-
-### 🔄 Adaptive Study Plan
-
-The study plan changes according to the student's performance.
-
-Instead of providing a fixed curriculum, LearnOS can move from foundational topics toward more advanced applications when mastery improves.
-
-Example progression:
-
-```text
-Weak Graph Traversal
-        ↓
-BFS Fundamentals
-        ↓
-Guided Traversal
-        ↓
-Practice
-        ↓
-Improved Mastery
-        ↓
-Advanced Graph Applications
+```bash
+npm install
+npm run dev
 ```
 
----
+Open [http://localhost:3000](http://localhost:3000). Enter a display name on the local demo sign-in screen.
 
-### 📊 Live Learning Dashboard
+Useful commands:
 
-The dashboard provides a centralized view of:
-
-* Overall mastery
-* Current learning focus
-* Knowledge profile
-* Learning progress
-* Adaptive plan status
-
-The dashboard updates as the learner progresses through the system.
-
----
-
-## 🧠 AI Architecture
-
-LearnOS uses a layered AI architecture designed for reliability.
-
-```text
-                    LearnOS AI
-                        │
-                ┌───────┴───────┐
-                │   AI Router   │
-                └───────┬───────┘
-                        │
-             ┌──────────┼──────────┐
-             ↓          ↓          ↓
-          Gemini      Groq      Other Free
-          Provider   Provider    Provider
-             │          │          │
-             └──────────┼──────────┘
-                        ↓
-              Deterministic Fallback
+```bash
+npm run lint
+npm run typecheck
+npm test
+npm run build -- --webpack
+npm start
 ```
 
-AI-powered functionality is isolated behind server-side API routes.
+## Optional AI providers
 
-Current AI-powered areas include:
+The app uses server-side provider keys only. Copy `.env.local.example` to `.env.local` and add the keys you choose to configure. Never use `NEXT_PUBLIC_` for provider secrets. `AI_PROVIDER_ORDER` can change the provider order; the default is Gemini, Groq, then Cerebras. The upload analyzer extracts text first and sends bounded page chunks to the configured router. It reports the provider that returned validated output. If no provider is configured or the response is invalid, the upload page shows only locally detected headings and marks difficulty, dependencies, and exam weight as unassessed. Live floating chat requires a configured provider; it is disabled when none is available.
 
-* Syllabus analysis
-* Diagnostic assessment generation
-* AI Tutor explanations
-* Adaptive study-plan generation
+Syllabus analysis accepts at most three files with a 10 MB combined file limit and retains at most 240 pages and 240,000 extracted characters per PDF. Analysis sends no more than 48,000 characters of page-bounded source chunks to the provider. Note2Learn accepts one file up to 5 MB and sends at most 50,000 extracted characters. The original files are discarded after extraction; extracted source text is stored in this browser for document-grounded tutoring. For each question, only a small set of relevant chunks and the last eight chat messages are sent to the provider. The tutor verifies returned citation excerpts against those chunks and derives the document name/page from the stored source. PDF support requires selectable text; scanned PDFs are reported as unsupported because OCR is not configured.
 
-If an AI provider becomes unavailable, the application can fall back to deterministic data so that the learning experience remains functional.
+## Demo data and persistence
 
----
+Learning progress, course data, generated note kits, quiz answers, and rewards are stored in this browser under `learnos_learning_state` (schema version 1). Extracted document text and the selected source are saved separately under a browser-local document-library key; tutor conversation history is also local and scoped to the current demo display name. Remove saved sources from `/upload` and use **New conversation** in the tutor to clear its chat. **Reset learning data** clears only the learning-state key. No database or cross-device sync is configured. The local display-name sign-in is a navigation convenience, not authentication or access control; do not use real credentials or sensitive personal data in this prototype.
 
-## 🛡️ Reliability First
+Avatar customization and learning interests are stored separately in this browser under `learnos_profile_preferences`. Daily quest progress is derived from dated learning evidence; a quest reward can only be claimed after its saved activity meets the displayed criteria. Plan items open the focused lesson, while completed lesson and answer history is recorded from learner activity.
 
-AI should improve the experience, not break it.
+Seeded DSA values are identified as sample data until a learner creates new course data or completes learning activities. Mastery estimates are provisional: they use submitted answers, are bounded per activity, and should not be read as a validated measure of ability. When AI is unavailable for a non-DSA course, the deterministic assessment fallback checks recall of the supplied course map rather than deep subject understanding.
 
-LearnOS is designed so that temporary AI failures such as:
+## Prototype security limits
 
-* Rate limits
-* Service overload
-* Network errors
-* Timeouts
-* Invalid AI responses
+API routes enforce request-size limits, field validation, timeouts, output schema checks, same-origin checks when an `Origin` header is present, and a process-local request throttle. The throttle resets when the server restarts and uses forwarded IP headers that may be supplied by the hosting layer; these controls are best effort for a local prototype. There is no server-side identity, durable storage, or production-grade abuse protection.
 
-do not result in a broken application.
+Uploaded documents are treated as untrusted educational source material. The AI instructions tell providers not to follow embedded instructions, but model output remains untrusted and is validated before it is used. Do not upload confidential or regulated documents.
 
-The system validates AI-generated structured responses before allowing them into the application.
+## Authentication and shared learning
 
----
+Google OAuth, server-side user profiles, friendship requests, direct messages, shared study rooms, public social feeds, and friend challenges are **not connected** in this prototype. The repository has no configured Google OAuth credentials or database URL. The browser display-name sign-in is the only available profile entry point, and it must not be treated as a secure session.
 
-## 🏗️ Architecture
-
-```text
-Next.js Application
-        │
-        ├── Student Authentication
-        │
-        ├── LearningContext
-        │       │
-        │       ├── Syllabus
-        │       ├── Assessment
-        │       ├── Knowledge
-        │       ├── Tutor
-        │       └── Study Plan
-        │
-        ├── AI API Routes
-        │       │
-        │       ├── Analyze Syllabus
-        │       ├── Generate Assessment
-        │       ├── Tutor Explanation
-        │       └── Adapt Plan
-        │
-        └── AI Provider Router
-                │
-                ├── Gemini
-                ├── Free AI Providers
-                └── Deterministic Fallback
-```
-
----
-
-## 🛠️ Tech Stack
-
-### Frontend
-
-* Next.js
-* React
-* TypeScript
-* Tailwind CSS
-
-### AI
-
-* Google Gemini
-* Free-tier AI providers through the AI router
-* Deterministic fallback system
-
-### Architecture
-
-* Next.js Route Handlers
-* React Context
-* Structured AI responses
-* Client-side learning state
-
-### Development
-
-* Git
-* GitHub
-* ESLint
-* TypeScript
-* Turbopack
-
----
-
-## 📁 Project Structure
-
-```text
-learnos-ai/
-│
-├── src/
-│   ├── app/
-│   │   ├── about/
-│   │   ├── api/
-│   │   │   ├── adapt-plan/
-│   │   │   ├── analyze-syllabus/
-│   │   │   ├── generate-assessment/
-│   │   │   └── tutor-explain/
-│   │   ├── assessment/
-│   │   ├── dashboard/
-│   │   ├── knowledge-map/
-│   │   ├── login/
-│   │   ├── plan/
-│   │   ├── tutor/
-│   │   └── upload/
-│   │
-│   ├── components/
-│   │   ├── dashboard/
-│   │   ├── features/
-│   │   └── motion/
-│   │
-│   ├── context/
-│   │   └── learning-context.tsx
-│   │
-│   ├── lib/
-│   │   ├── gemini.ts
-│   │   └── ai-router.ts
-│   │
-│   └── types/
-│
-├── public/
-│
-├── package.json
-├── next.config.ts
-└── README.md
-```
-
----
-
-## 🔄 LearnOS Learning Loop
-
-The complete student journey is:
-
-```text
-Student Login
-      ↓
-Dashboard
-      ↓
-Upload Syllabus
-      ↓
-AI Syllabus Analysis
-      ↓
-Diagnostic Assessment
-      ↓
-Knowledge Map
-      ↓
-Identify Knowledge Gap
-      ↓
-AI Tutor
-      ↓
-Interactive Practice
-      ↓
-Mastery Update
-      ↓
-Adaptive Study Plan
-      ↓
-Dashboard
-```
-
-This creates a continuous feedback loop where the learner's performance influences what they learn next.
-
----
-
-## 🎯 Example: DSA Learning Journey
-
-A demonstration learner starts with:
-
-```text
-Graphs: 31
-```
+The Friends, Messages, Study Rooms, and Friend Challenges routes explain this limitation instead of showing fabricated users or pretending that data syncs. A real multi-user release needs the Auth.js Next.js integration, Google OAuth credentials, a persistent database and migrations, plus server-side ownership checks for each social operation. The planned OAuth variables are `AUTH_SECRET`, `AUTH_GOOGLE_ID`, and `AUTH_GOOGLE_SECRET`; for a local Auth.js setup the Google redirect URI will be `http://localhost:3000/api/auth/callback/google`. These placeholders are intentionally commented out because the OAuth package installation did not complete and no callback route is active. Adding the values alone will not enable sign-in.

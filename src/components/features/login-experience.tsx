@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowRight, AlertCircle, KeyRound, User, Lock, Sparkles, BookOpen } from "lucide-react";
+import { ArrowRight, AlertCircle, User, Sparkles, BookOpen } from "lucide-react";
 import { useAuth } from "@/context/auth-context";
 
 export function LoginExperience() {
@@ -11,7 +11,6 @@ export function LoginExperience() {
   const router = useRouter();
 
   const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -26,26 +25,20 @@ export function LoginExperience() {
     e.preventDefault();
     setError(null);
 
-    if (!username.trim() || !password.trim()) {
-      setError("Please enter both username and password.");
+    if (!username.trim()) {
+      setError("Enter a name to open your local demo profile.");
       return;
     }
 
     setIsSubmitting(true);
-    const success = login(username, password);
+    const success = login(username);
     setIsSubmitting(false);
 
     if (success) {
       router.push("/dashboard");
     } else {
-      setError("Incorrect username or password.");
+      setError("Enter a name to continue.");
     }
-  };
-
-  const handleFillDemo = (user: string) => {
-    setUsername(user);
-    setPassword("learnos");
-    setError(null);
   };
 
   return (
@@ -64,7 +57,7 @@ export function LoginExperience() {
           </h1>
 
           <p className="text-sm text-[#5F5A54] leading-relaxed max-w-sm mx-auto">
-            Sign in to access your adaptive learning syllabus, diagnostic assessments, and dynamic study plan.
+            Open a local demo profile to continue your learning journey on this device.
           </p>
         </div>
 
@@ -81,13 +74,13 @@ export function LoginExperience() {
               </div>
             )}
 
-            {/* Username Input */}
+            {/* Local demo profile name */}
             <div className="space-y-1.5">
               <label
                 htmlFor="username"
                 className="block text-xs font-semibold uppercase tracking-wider text-[#5F5A54]"
               >
-                Username
+                Name for this device
               </label>
               <div className="relative">
                 <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-[#5F5A54]">
@@ -97,43 +90,14 @@ export function LoginExperience() {
                   id="username"
                   name="username"
                   type="text"
-                  autoComplete="username"
+                  autoComplete="name"
                   required
                   value={username}
                   onChange={(e) => {
                     setUsername(e.target.value);
                     if (error) setError(null);
                   }}
-                  placeholder="e.g. student or abhishek"
-                  className="w-full rounded-xl border border-[var(--border)] bg-[#F5EEE5]/40 py-2.5 pl-10 pr-4 text-sm text-[#111111] placeholder:text-[#5F5A54]/60 focus:border-[#2563EB] focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#2563EB] transition"
-                />
-              </div>
-            </div>
-
-            {/* Password Input */}
-            <div className="space-y-1.5">
-              <label
-                htmlFor="password"
-                className="block text-xs font-semibold uppercase tracking-wider text-[#5F5A54]"
-              >
-                Password
-              </label>
-              <div className="relative">
-                <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-[#5F5A54]">
-                  <Lock size={16} />
-                </div>
-                <input
-                  id="password"
-                  name="password"
-                  type="password"
-                  autoComplete="current-password"
-                  required
-                  value={password}
-                  onChange={(e) => {
-                    setPassword(e.target.value);
-                    if (error) setError(null);
-                  }}
-                  placeholder="••••••••"
+                  placeholder="e.g. Abhishek"
                   className="w-full rounded-xl border border-[var(--border)] bg-[#F5EEE5]/40 py-2.5 pl-10 pr-4 text-sm text-[#111111] placeholder:text-[#5F5A54]/60 focus:border-[#2563EB] focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#2563EB] transition"
                 />
               </div>
@@ -150,34 +114,9 @@ export function LoginExperience() {
             </button>
           </form>
 
-          {/* Quick Demo Autofill Chips */}
-          <div className="mt-6 pt-5 border-t border-[var(--border)]">
-            <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-[#5F5A54] mb-2.5">
-              <span className="flex items-center gap-1.5">
-                <KeyRound size={12} />
-                Demo Credentials
-              </span>
-              <span>Click to autofill</span>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => handleFillDemo("student")}
-                className="flex items-center justify-between rounded-lg border border-[var(--border)] bg-[#F5EEE5]/60 px-3 py-2 text-xs font-medium text-[#111111] hover:bg-[#E8F0FF] hover:border-[#2563EB]/40 hover:text-[#2563EB] transition"
-              >
-                <span>student</span>
-                <span className="text-[10px] text-[#5F5A54]">learnos</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleFillDemo("abhishek")}
-                className="flex items-center justify-between rounded-lg border border-[var(--border)] bg-[#F5EEE5]/60 px-3 py-2 text-xs font-medium text-[#111111] hover:bg-[#E8F0FF] hover:border-[#2563EB]/40 hover:text-[#2563EB] transition"
-              >
-                <span>abhishek</span>
-                <span className="text-[10px] text-[#5F5A54]">learnos</span>
-              </button>
-            </div>
-          </div>
+          <p className="mt-5 border-t border-[var(--border)] pt-4 text-xs leading-5 text-[#5F5A54]">
+            This is a local demo profile, not a secure account. Your name is stored only to label this browser session.
+          </p>
         </div>
 
         {/* Footer / About Link */}

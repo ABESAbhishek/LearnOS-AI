@@ -52,12 +52,15 @@ export function TutorExperience() {
     courseModel,
     tutorPracticeCompleted,
     completeTutorPractice,
+    markTutorLessonCompleted,
+    recordLearningEvidence,
     tutorSource,
     setTutorSource,
+    isSampleData,
   } = useLearning();
 
   // Dynamically determine the lowest-scoring topic to remediate
-  let calculatedWeakTopic = "Graphs";
+  let calculatedWeakTopic = courseModel.topics[0]?.name ?? (courseModel.courseName === "Data Structures & Algorithms" ? "Graphs" : "Course overview");
   let lowestMastery = 100;
   if (knowledgeScores && Object.keys(knowledgeScores).length > 0) {
     Object.entries(knowledgeScores).forEach(([t, s]) => {
@@ -68,19 +71,32 @@ export function TutorExperience() {
     });
   }
 
-  // Find subtopics from courseModel if available
+  const selectedTopic = calculatedWeakTopic;
+  const [requestedTopic, setRequestedTopic] = useState("");
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setRequestedTopic(new URLSearchParams(window.location.search).get("topic")?.slice(0, 120) ?? "");
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  const focusedCourseTopic = courseModel.topics.find((topic) => topic.name.toLocaleLowerCase() === requestedTopic.toLocaleLowerCase());
+  const activeTopic = focusedCourseTopic?.name ?? selectedTopic;
+
+  // Find subtopics for the topic selected by the learner or recommended by LearnOS.
   const matchedCourseTopic = courseModel?.topics?.find(
-    (t) => t.name.toLowerCase() === calculatedWeakTopic.toLowerCase()
+    (t) => t.name.toLowerCase() === activeTopic.toLowerCase()
   );
   const weakAreas = useMemo(() => {
     return matchedCourseTopic?.subtopics && matchedCourseTopic.subtopics.length > 0
       ? matchedCourseTopic.subtopics
       : currentFocus && currentFocus.length > 0
       ? currentFocus
-      : [calculatedWeakTopic];
-  }, [matchedCourseTopic, currentFocus, calculatedWeakTopic]);
+      : [activeTopic];
+  }, [matchedCourseTopic, currentFocus, activeTopic]);
 
-  const weakMastery = knowledgeScores[calculatedWeakTopic] ?? lowestMastery ?? 31;
+  const weakMastery = knowledgeScores[activeTopic] ?? lowestMastery ?? 31;
 
   const [currentStage, setCurrentStage] = useState<StageId>(0);
   const [traversalStep, setTraversalStep] = useState(0);
@@ -97,7 +113,7 @@ export function TutorExperience() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        topic: calculatedWeakTopic,
+        topic: activeTopic,
         mastery: weakMastery,
         weakAreas,
         stage: 0,
@@ -109,9 +125,9 @@ export function TutorExperience() {
       })
       .then((data) => {
         if (!isMounted) return;
-        if (data && data.explanation && data.source === "gemini") {
+        if (data && data.explanation && data.source !== "baseline") {
           setExplanation(data.explanation);
-          setTutorSource("gemini");
+          setTutorSource(data.source);
         } else {
           if (data && data.explanation) {
             setExplanation(data.explanation);
@@ -128,7 +144,7 @@ export function TutorExperience() {
     return () => {
       isMounted = false;
     };
-  }, [calculatedWeakTopic, weakMastery, weakAreas, setTutorSource]);
+  }, [activeTopic, weakMastery, weakAreas, setTutorSource]);
 
   const steps = explanation.visualSteps && explanation.visualSteps.length > 0
     ? explanation.visualSteps
@@ -138,7 +154,7 @@ export function TutorExperience() {
 
   const isGraphTopic =
     explanation.topic.toLowerCase().includes("graph") ||
-    calculatedWeakTopic.toLowerCase().includes("graph");
+    activeTopic.toLowerCase().includes("graph");
 
   function nextStage() {
     if (currentStage < 2) {
@@ -153,11 +169,24 @@ export function TutorExperience() {
   }
 
   function handlePracticeSubmit() {
-    if (selectedPracticeOption === null) return;
-    if (selectedPracticeOption === explanation.practiceQuestion.correctOption) {
+    if (selectedPracticeOption === null || practiceSubmitted) return;
+    const topicName = courseModel.topics.find((topic) => topic.name.toLowerCase() === explanation.topic.toLowerCase())?.name || activeTopic;
+    const isCorrect = selectedPracticeOption === explanation.practiceQuestion.correctOption;
+    recordLearningEvidence({
+      eventId: `tutor:${courseModel.courseName}:${topicName}:practice`,
+      activityId: `tutor:${courseModel.courseName}:${topicName}`,
+      kind: "tutor-practice",
+      questionId: "practice-question",
+      topic: topicName,
+      selectedOption: selectedPracticeOption,
+      correct: isCorrect,
+      recordedAt: new Date().toISOString(),
+    });
+    if (isCorrect) {
       setPracticeSubmitted(true);
       setPracticeError(false);
-      completeTutorPractice(calculatedWeakTopic);
+      completeTutorPractice(topicName);
+      if (traversalStep >= steps.length - 1) markTutorLessonCompleted(topicName);
     } else {
       setPracticeError(true);
     }
@@ -179,8 +208,10 @@ export function TutorExperience() {
               Let&apos;s strengthen your {explanation.topic}.
             </h1>
             <p className="mt-3 text-base leading-7 text-[#5F5A54] sm:text-lg">
-              LearnOS identified {explanation.topic.toLowerCase()} as your current priority gap ({weakMastery}% mastery).
-              This session breaks down {weakAreas.slice(0, 2).join(" & ") || explanation.topic} into intuitive foundations.
+              {isSampleData
+                ? `The seeded DSA sample profile highlights ${explanation.topic.toLowerCase()} (${weakMastery}%) as a starting focus.`
+                : `Your current profile highlights ${explanation.topic.toLowerCase()} (${weakMastery}%) as a focus for practice.`}
+              {" "}This session breaks down {weakAreas.slice(0, 2).join(" & ") || explanation.topic} into intuitive foundations.
             </p>
           </div>
 
@@ -188,20 +219,20 @@ export function TutorExperience() {
             <span className="relative flex h-2.5 w-2.5">
               <span
                 className={`absolute inline-flex h-full w-full animate-ping rounded-full ${
-                  tutorSource === "gemini" ? "bg-emerald-500" : "bg-[#2563EB]"
+                  tutorSource !== "baseline" ? "bg-emerald-500" : "bg-[#2563EB]"
                 } opacity-60`}
               />
               <span
                 className={`relative inline-flex h-2.5 w-2.5 rounded-full ${
-                  tutorSource === "gemini" ? "bg-emerald-500" : "bg-[#2563EB]"
+                  tutorSource !== "baseline" ? "bg-emerald-500" : "bg-[#2563EB]"
                 }`}
               />
             </span>
             <span className="text-xs font-medium text-[#111111]">
-              {tutorSource === "gemini" ? (
-                <>Gemini 3.8 Flash Tutor &middot; {explanation.topic}</>
+              {tutorSource !== "baseline" ? (
+                <>AI Tutor &middot; {explanation.topic}</>
               ) : (
-                <>Targeted Session &middot; {explanation.topic}</>
+                <>Baseline lesson &middot; {explanation.topic}</>
               )}
             </span>
           </div>
@@ -220,6 +251,7 @@ export function TutorExperience() {
                 key={stage.id}
                 type="button"
                 onClick={() => setCurrentStage(stage.id as StageId)}
+                disabled={stage.id > currentStage}
                 className={`flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-left transition-all ${
                   isActive
                     ? "bg-white shadow-sm ring-1 ring-black/10 text-[#111111]"
@@ -623,7 +655,8 @@ export function TutorExperience() {
                 {/* Feedback Banner */}
                 {practiceError && (
                   <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700">
-                    Not quite. Review the principles and steps in Stage 1 and 2, then select another option!
+                    <p className="font-semibold">Not quite.</p>
+                    <p className="mt-1 leading-5">The answer is {explanation.practiceQuestion.options[explanation.practiceQuestion.correctOption]}. Review the {explanation.topic} explanation and stepper, then try again.</p>
                   </div>
                 )}
 
@@ -631,13 +664,13 @@ export function TutorExperience() {
                   <div className="mt-4 rounded-xl border border-[#2563EB]/25 bg-[#E8F0FF] p-4 text-xs text-[#111111]">
                     <div className="flex items-center gap-2 font-semibold text-[#2563EB]">
                       <Check size={16} strokeWidth={2.5} />
-                      <span>Correct! Conceptual Gap Mastered</span>
+                      <span>Correct · practice complete</span>
                     </div>
                     <p className="mt-1 leading-5 text-[#5F5A54]">
-                      Great job! You have demonstrated clear grasp of {explanation.topic} and verified the concept thoroughly.
+                      This answer adds a small evidence signal for {explanation.topic}. Keep practicing to build a stronger estimate.
                     </p>
                     <p className="mt-2 font-medium text-[#2563EB]">
-                      {explanation.topic} mastery increased to 74%! Your Adaptive Study Plan has been updated.
+                      Current estimated mastery: {knowledgeScores[explanation.topic] ?? weakMastery}%. Your study plan now prioritizes your latest learning evidence.
                     </p>
                   </div>
                 )}

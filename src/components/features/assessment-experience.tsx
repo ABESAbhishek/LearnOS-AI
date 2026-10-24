@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, type CSSProperties } from "react";
+import { useState, useEffect, useRef, useId, type CSSProperties } from "react";
 import Link from "next/link";
 import { ArrowLeft, ArrowRight, Check, RotateCcw, Sparkles } from "lucide-react";
 import { FeatureFrame, FeatureHeading, SectionLabel } from "@/components/features/feature-frame";
@@ -9,47 +9,52 @@ import { ProgressBar } from "@/components/motion/progress-bar";
 import { useLearning } from "@/context/learning-context";
 import type { Question, AssessmentEvidence } from "@/types/assessment";
 import type { TopicDifficulty } from "@/types/course";
-import { CANONICAL_QUESTIONS } from "@/lib/assessment-bank";
+import { buildCourseBaselineAssessmentQuestions, CANONICAL_QUESTIONS } from "@/lib/assessment-bank";
+import { validateBatchQuestions } from "@/types/assessment";
 import {
-  computeDiagnosticScores,
-  CANONICAL_DSA_SCORES,
-} from "@/lib/adaptive-assessment";
+  estimateMasteryFromEvidence,
+  isValidAnswerSelection,
+} from "@/lib/mastery-estimation";
 import styles from "./assessment-experience.module.css";
 
 export function AssessmentExperience() {
   const {
     courseModel,
+    knowledgeScores,
     assessmentSource,
     setAssessmentSource,
-    updateAssessmentMastery,
+    recordLearningEvidence,
+    completeAssessmentAttempt,
   } = useLearning();
 
-  const [questions, setQuestions] = useState<Question[]>(CANONICAL_QUESTIONS);
+  const [questions, setQuestions] = useState<Question[]>(() => buildCourseBaselineAssessmentQuestions(courseModel.topics));
   const [questionIndex, setQuestionIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<number, number>>({});
   const [evidenceList, setEvidenceList] = useState<AssessmentEvidence[]>([]);
   const [completedQuestions, setCompletedQuestions] = useState<Set<number>>(() => new Set());
   const [score, setScore] = useState(0);
-  const [topicPerformance, setTopicPerformance] = useState<Record<string, number>>(CANONICAL_DSA_SCORES);
+  const [topicPerformance, setTopicPerformance] = useState<Record<string, number>>(knowledgeScores);
+  const assessmentBaselineRef = useRef(knowledgeScores);
+  const assessmentIdRef = useRef<string | null>(null);
+  const assessmentInstanceId = useId();
+  const assessmentAttemptRef = useRef(1);
   const [direction, setDirection] = useState<"next" | "previous">("next");
   const [complete, setComplete] = useState(false);
-  const [primaryGap, setPrimaryGap] = useState("BFS / DFS traversal & shortest-path exploration");
-  const [priorityTopic, setPriorityTopic] = useState("Graphs");
-
   const hasInteractedRef = useRef(false);
 
   const question = questions[questionIndex] || CANONICAL_QUESTIONS[0];
   const selectedAnswer = answers[questionIndex];
   const progress = ((questionIndex + 1) / questions.length) * 100;
-  const overallUnderstanding = Math.round(60 + (score / (questions.length || 1)) * 16);
+  const overallUnderstanding = Math.round((score / (questions.length || 1)) * 100);
+  const priorityTopic = Object.entries(topicPerformance).sort((a, b) => a[1] - b[1])[0]?.[0] || courseModel.topics[0]?.name || "Core Concepts";
+  const prioritySubtopics = courseModel.topics.find((topic) => topic.name.toLowerCase() === priorityTopic.toLowerCase())?.subtopics || [];
+  const primaryGap = prioritySubtopics.slice(0, 2).join(" and ") || `${priorityTopic} foundations and application`;
 
   const topicEntries = questions.map(({ topic }) => ({
     topic,
     mastery: topicPerformance[topic] ?? 60,
   }));
-  const strongAreas = topicEntries.filter(({ mastery }) => mastery >= 75).length;
   const needsAttention = topicEntries.filter(({ mastery }) => mastery < 50).length;
-  const emergingAreas = Math.max(0, topicEntries.length - strongAreas - needsAttention);
 
   // Fetch 8 grounded diagnostic questions in batch from Gemini on mount
   useEffect(() => {
@@ -73,28 +78,36 @@ export function AssessmentExperience() {
       })
       .then((data) => {
         if (!isMounted) return;
+        const source = ["baseline", "gemini", "groq", "cerebras"].includes(data?.source)
+          ? data.source as "baseline" | "gemini" | "groq" | "cerebras"
+          : "baseline";
         if (
           data &&
           Array.isArray(data.questions) &&
           data.questions.length === 8 &&
-          data.source === "gemini"
+          validateBatchQuestions(data)
         ) {
+          const allowedTopics = new Set(courseModel.topics.map((topic) => topic.name.toLowerCase()));
+          const hasOnlyKnownTopics = data.questions.every((item: Question) => allowedTopics.has(item.topic.toLowerCase()));
+          if (!hasOnlyKnownTopics) {
+            setAssessmentSource("baseline");
+            if (!hasInteractedRef.current) setQuestions(buildCourseBaselineAssessmentQuestions(courseModel.topics));
+            return;
+          }
           if (!hasInteractedRef.current) {
             setQuestions(data.questions);
-            setAssessmentSource("gemini");
-            const initialMap: Record<string, number> = {};
-            data.questions.forEach((q: Question) => {
-              initialMap[q.topic] = CANONICAL_DSA_SCORES[q.topic] ?? 60;
-            });
-            setTopicPerformance((prev) => ({ ...initialMap, ...prev }));
+            setAssessmentSource(source);
+            setTopicPerformance(assessmentBaselineRef.current);
           }
         } else {
           setAssessmentSource("baseline");
+          if (!hasInteractedRef.current) setQuestions(buildCourseBaselineAssessmentQuestions(courseModel.topics));
         }
       })
       .catch(() => {
         if (isMounted) {
           setAssessmentSource("baseline");
+          if (!hasInteractedRef.current) setQuestions(buildCourseBaselineAssessmentQuestions(courseModel.topics));
         }
       });
 
@@ -104,7 +117,11 @@ export function AssessmentExperience() {
   }, [courseModel, setAssessmentSource]);
 
   function recordAnswer(optionIndex: number) {
+    const allowedTopics = courseModel.topics.map((topic) => topic.name);
+    if (!isValidAnswerSelection(question.topic, optionIndex, question.options.length, allowedTopics)) return;
     hasInteractedRef.current = true;
+    const activityId = assessmentIdRef.current || `assessment:${assessmentInstanceId}:${assessmentAttemptRef.current++}`;
+    assessmentIdRef.current = activityId;
     const isCorrect = optionIndex === question.correctOption;
     const nextAnswers = { ...answers, [questionIndex]: optionIndex };
     const nextCompleted = new Set(completedQuestions);
@@ -133,11 +150,20 @@ export function AssessmentExperience() {
     setCompletedQuestions(nextCompleted);
     setEvidenceList(updatedEvidence);
 
-    // Compute updated diagnostic mastery
-    const diagnostic = computeDiagnosticScores(topicPerformance, updatedEvidence);
-    setTopicPerformance(diagnostic.scores);
-    setPrimaryGap(diagnostic.primaryGap);
-    setPriorityTopic(diagnostic.priorityTopic);
+    const learningEvidence = updatedEvidence.map((item) => ({
+      eventId: `assessment:${activityId}:${item.questionId}`,
+      activityId,
+      kind: "assessment" as const,
+      questionId: item.questionId,
+      topic: item.topic,
+      selectedOption: item.selectedOption,
+      correct: item.correct,
+      recordedAt: new Date().toISOString(),
+    }));
+    const estimatedScores = estimateMasteryFromEvidence(assessmentBaselineRef.current, learningEvidence);
+    setTopicPerformance(estimatedScores);
+    const currentQuestionId = newEvidence.questionId;
+    recordLearningEvidence(learningEvidence.find((item) => item.questionId === currentQuestionId)!);
 
     setScore(
       questions.reduce((total, item, idx) => total + (nextAnswers[idx] === item.correctOption ? 1 : 0), 0)
@@ -154,7 +180,17 @@ export function AssessmentExperience() {
     if (selectedAnswer === undefined) return;
     if (questionIndex === questions.length - 1) {
       setComplete(true);
-      updateAssessmentMastery(topicPerformance);
+      const attemptedCount = Object.keys(answers).length;
+      const correctCount = questions.reduce((total, item, index) => total + (answers[index] === item.correctOption ? 1 : 0), 0);
+      const attemptId = assessmentIdRef.current || `assessment:${assessmentInstanceId}:${assessmentAttemptRef.current++}`;
+      assessmentIdRef.current = attemptId;
+      completeAssessmentAttempt({
+        id: attemptId,
+        completedAt: new Date().toISOString(),
+        questionCount: questions.length,
+        attemptedCount,
+        correctCount,
+      });
       return;
     }
     setDirection("next");
@@ -163,12 +199,14 @@ export function AssessmentExperience() {
 
   function restartAssessment() {
     hasInteractedRef.current = false;
+    assessmentIdRef.current = null;
+    assessmentBaselineRef.current = knowledgeScores;
     setQuestionIndex(0);
     setAnswers({});
     setEvidenceList([]);
     setCompletedQuestions(new Set());
     setScore(0);
-    setTopicPerformance({ ...CANONICAL_DSA_SCORES });
+    setTopicPerformance(knowledgeScores);
     setDirection("next");
     setComplete(false);
   }
@@ -181,15 +219,15 @@ export function AssessmentExperience() {
         description={
           complete
             ? "Your responses have helped LearnOS see where understanding feels strong and where focused practice could make a difference."
-            : "Answer a few targeted questions. LearnOS adapts to your answers to build your precise knowledge profile."
+              : "Answer a few targeted questions. Each response adds a small, bounded signal to your topic-level learning profile."
         }
         aside={
           <div className="min-w-48 rounded-xl border border-border bg-surface/50 px-3.5 py-2.5">
             <span className="flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-[0.15em] text-muted">
-              {assessmentSource === "gemini" ? (
+              {assessmentSource !== "baseline" ? (
                 <>
                   <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  <span>Gemini 3.8 Flash Diagnostic</span>
+                  <span>AI Diagnostic</span>
                 </>
               ) : (
                 <span>Diagnostic Assessment</span>
@@ -218,7 +256,7 @@ export function AssessmentExperience() {
               <ProgressBar value={progress} label="Diagnostic assessment progress" className="h-1.5" />
             </div>
             <p className="mt-3 text-xs leading-5 text-muted">
-              Adaptive questions probe understanding and isolate conceptual gaps topic by topic.
+              Your responses provide early topic-level signals. A single answer cannot move mastery by more than a small amount.
             </p>
             <div className="mt-6 border-t border-border pt-5">
               <SectionLabel>Topics in this check-in</SectionLabel>
@@ -314,9 +352,14 @@ export function AssessmentExperience() {
 
               <div className="mt-5 min-h-8" aria-live="polite" aria-atomic="true">
                 {selectedAnswer !== undefined && (
-                  <span className="inline-flex items-center gap-2 text-xs text-muted" role="status">
-                    <span className="ai-pulse size-1.5 rounded-full bg-accent" aria-hidden="true" /> Diagnostic response recorded
-                  </span>
+                  <div className={`rounded-xl border p-3.5 text-xs leading-5 ${selectedAnswer === question.correctOption ? "border-accent/20 bg-accent-soft/50 text-foreground" : "border-border bg-white/35 text-muted"}`} role="status">
+                    <p className="font-semibold text-foreground">
+                      {selectedAnswer === question.correctOption ? "Correct." : `Not quite. The answer is ${question.options[question.correctOption]}.`}
+                    </p>
+                    <p className="mt-1">
+                      {question.explanation?.trim() || `This question checks your understanding of ${question.topic}. Review the topic notes, then continue.`}
+                    </p>
+                  </div>
                 )}
               </div>
 
@@ -347,7 +390,7 @@ export function AssessmentExperience() {
             <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
               <div>
                 <SectionLabel>Diagnostic complete / Your profile</SectionLabel>
-                <p className="mt-2 text-sm text-muted">Your answers have calibrated your adaptive learning profile.</p>
+                <p className="mt-2 text-sm text-muted">These responses are early learning signals. Mastery estimates remain provisional and update with more evidence.</p>
               </div>
               <button
                 type="button"
@@ -359,11 +402,11 @@ export function AssessmentExperience() {
             </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
               {[
-                { label: "Overall understanding", value: overallUnderstanding, percent: true, feature: true },
-                { label: "Topics assessed", value: completedQuestions.size, percent: false },
-                { label: "Strong areas", value: strongAreas, percent: false },
-                { label: "Needs attention", value: needsAttention, percent: false },
-                { label: "Emerging areas", value: emergingAreas, percent: false },
+                { label: "Response accuracy", value: overallUnderstanding, percent: true, feature: true },
+                { label: "Attempted", value: Object.keys(answers).length, percent: false },
+                { label: "Correct", value: score, percent: false },
+                { label: "Unanswered", value: questions.length - Object.keys(answers).length, percent: false },
+                { label: "Topics needing attention", value: needsAttention, percent: false },
               ].map((metric, index) => (
                 <article
                   key={metric.label}
@@ -384,10 +427,10 @@ export function AssessmentExperience() {
           <section className="panel motion-reveal motion-reveal--section motion-delay-1 p-5 sm:p-7" data-motion-reveal aria-labelledby="topic-profile-title">
             <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
               <div>
-                <SectionLabel>Knowledge profile / {questions.length} topics</SectionLabel>
+                <SectionLabel>Knowledge profile / {questions.length} questions</SectionLabel>
                 <h2 id="topic-profile-title" className="mt-2 text-xl font-medium tracking-[-0.04em]">Your understanding, topic by topic.</h2>
               </div>
-              <span className="text-[11px] text-muted">Adaptive signals from your responses</span>
+              <span className="text-[11px] text-muted">Provisional signals from your responses</span>
             </div>
             <ul className="motion-stagger grid gap-1 sm:grid-cols-2 sm:gap-x-6" aria-label="Topic understanding levels">
               {topicEntries.map(({ topic, mastery }, index) => {
@@ -430,7 +473,7 @@ export function AssessmentExperience() {
               </span>
               <h2 className="mt-4 text-2xl font-medium tracking-[-0.045em]">LearnOS found a learning gap.</h2>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-muted">
-                Your fundamentals are strongest in foundational data structures. {priorityTopic} is currently the largest knowledge gap, specifically: {primaryGap}.
+                {priorityTopic} is currently the lowest estimated topic in this profile. The next learning step focuses on {primaryGap}. Estimates will become more useful as you complete more practice.
               </p>
             </article>
 
@@ -442,7 +485,7 @@ export function AssessmentExperience() {
                   <AnimatedNumber value={topicPerformance[priorityTopic] ?? 31} className="text-5xl font-medium tracking-[-0.07em]" />
                   <span className="text-2xl text-muted">%</span>
                 </div>
-                <p className="mt-2 text-xs text-muted">Targeted remediation path ready</p>
+                <p className="mt-2 text-xs text-muted">Current estimate; continue practice to strengthen this signal.</p>
               </div>
               <ProgressBar value={topicPerformance[priorityTopic] ?? 31} label={`${priorityTopic} current priority`} className="mt-7 h-2" />
             </aside>

@@ -4,7 +4,9 @@ import {
   createContext,
   useContext,
   useState,
+  useEffect,
   useCallback,
+  useMemo,
   type ReactNode,
 } from "react";
 
@@ -14,8 +16,14 @@ import {
   INITIAL_PLAN_TASKS,
   ADAPTED_PLAN_TASKS,
 } from "@/types/plan";
+import type { AISource } from "@/lib/ai/types";
+import type { LearningEvidence, AssessmentHistoryEntry, GamificationState, NoteLearningItem, PersistedLearningState } from "@/types/learning";
+import { clearLearningState, loadLearningState, saveLearningState } from "@/lib/learning-persistence";
+import { estimateMasteryFromEvidence, upsertLearningEvidence } from "@/lib/mastery-estimation";
+import { awardLearningEvent, INITIAL_GAMIFICATION_STATE, localDateKey, weeklyActiveDays } from "@/lib/reward-rules";
+import { getDailyQuests, type DailyQuestId } from "@/lib/daily-quests";
 
-export type { PlanTask };
+export type { PlanTask, AISource };
 export const INITIAL_TASKS = INITIAL_PLAN_TASKS;
 export const ADAPTED_TASKS = ADAPTED_PLAN_TASKS;
 
@@ -29,20 +37,29 @@ export type TopicMastery = {
 export type LearningContextType = {
   // Course & Syllabus Model
   courseModel: CourseModel;
-  analysisSource: "gemini" | "baseline";
+  currentSubject: string;
+  analysisSource: AISource;
   analysisStatus: "idle" | "analyzing" | "success" | "error";
   analysisError: string | null;
+  learningGoal: string;
+  setLearningGoal: (goal: string) => void;
+  isSampleData: boolean;
+  persistenceReady: boolean;
+  persistenceError: boolean;
 
   // Assessment
-  assessmentSource: "gemini" | "baseline";
-  setAssessmentSource: (source: "gemini" | "baseline") => void;
+  assessmentSource: AISource;
+  setAssessmentSource: (source: AISource) => void;
 
   // Tutor
-  tutorSource: "gemini" | "baseline";
-  setTutorSource: (source: "gemini" | "baseline") => void;
+  tutorSource: AISource;
+  setTutorSource: (source: AISource) => void;
 
   // Knowledge profile
   knowledgeScores: Record<string, number>;
+  evidence: LearningEvidence[];
+  assessmentHistory: AssessmentHistoryEntry[];
+  lessonCompletedTopics: string[];
   topics: TopicMastery[];
   overallMastery: number;
   weakestTopic: string;
@@ -59,23 +76,33 @@ export type LearningContextType = {
   setPlanAdapted: (adapted: boolean) => void;
 
   // Plan
-  planSource: "gemini" | "baseline";
-  setPlanSource: (source: "gemini" | "baseline") => void;
+  planSource: AISource;
+  setPlanSource: (source: AISource) => void;
   planTasks: PlanTask[];
   setPlanTasks: (tasks: PlanTask[]) => void;
+  gamification: GamificationState;
+  weeklyLearningDays: number;
+  claimDailyQuest: (questId: DailyQuestId) => boolean;
+  noteItems: NoteLearningItem[];
 
   // Action methods
   markSyllabusAnalyzed: (count?: number) => void;
   setCourseAnalysis: (params: {
     courseModel: CourseModel;
-    source: "gemini" | "baseline";
+    source: AISource;
     materialsCount?: number;
     error?: string;
+    learningGoal?: string;
+    isSampleData?: boolean;
   }) => void;
-  updateAssessmentMastery: (scores: Record<string, number>) => void;
+  recordLearningEvidence: (evidence: LearningEvidence) => void;
+  completeAssessmentAttempt: (entry: AssessmentHistoryEntry) => void;
   completeTutorPractice: (topic?: string) => void;
-  togglePlanTask: (taskId: string) => void;
-  resetSessionPlan: () => void;
+  markTutorLessonCompleted: (topic: string) => void;
+  addNoteItem: (item: NoteLearningItem) => void;
+  updateNoteItem: (id: string, update: Partial<NoteLearningItem>) => void;
+  completeNoteQuiz: (id: string) => void;
+  toggleFlashcardMastery: (noteId: string, flashcardId: string) => void;
   resetEntireDemo: () => void;
 };
 
@@ -88,6 +115,51 @@ const INITIAL_SCORES: Record<string, number> = {
   Graphs: 31,
 };
 
+function createInitialScores(course = BASELINE_DSA_COURSE): Record<string, number> {
+  const scores: Record<string, number> = {};
+  course.topics.forEach((topic, index) => {
+    if (INITIAL_SCORES[topic.name] !== undefined) {
+      scores[topic.name] = INITIAL_SCORES[topic.name];
+    } else if (index === course.topics.length - 1) {
+      scores[topic.name] = 34;
+    } else if (index === 0) {
+      scores[topic.name] = 88;
+    } else if (index === 1) {
+      scores[topic.name] = 78;
+    } else {
+      scores[topic.name] = Math.max(45, 75 - index * 7);
+    }
+  });
+  return scores;
+}
+
+function createInitialProfile(): PersistedLearningState {
+  const scores = createInitialScores();
+  return {
+    version: 1,
+    courseModel: BASELINE_DSA_COURSE,
+    learningGoal: "",
+    analysisSource: "baseline",
+    assessmentSource: "baseline",
+    tutorSource: "baseline",
+    planSource: "baseline",
+    knowledgeScores: scores,
+    masteryBaseline: scores,
+    evidence: [],
+    assessmentHistory: [],
+    syllabusAnalyzed: true,
+    uploadedMaterialsCount: 3,
+    assessmentCompleted: false,
+    tutorPracticeCompleted: false,
+    lessonCompletedTopics: [],
+    planAdapted: false,
+    planTasks: INITIAL_PLAN_TASKS,
+    isSampleData: true,
+    noteItems: [],
+    gamification: INITIAL_GAMIFICATION_STATE,
+  };
+}
+
 function calculateLevel(score: number): TopicMastery["level"] {
   if (score >= 80) return "Strong";
   if (score >= 60) return "Good";
@@ -95,31 +167,165 @@ function calculateLevel(score: number): TopicMastery["level"] {
   return "Priority";
 }
 
+function awardCrossedMasteries(
+  current: GamificationState,
+  previousScores: Record<string, number>,
+  nextScores: Record<string, number>,
+  courseName: string,
+): GamificationState {
+  let next = current;
+  Object.entries(nextScores).forEach(([topic, score]) => {
+    if ((previousScores[topic] ?? 0) < 80 && score >= 80) {
+      next = awardLearningEvent(next, {
+        id: `mastery:${courseName}:${topic}:80`,
+        kind: "masteryMilestone",
+        localDate: localDateKey(),
+        badge: `${topic} mastery milestone`,
+      }).state;
+    }
+  });
+  return next;
+}
+
 const LearningContext = createContext<LearningContextType | null>(null);
 
 export function LearningProvider({ children }: { children: ReactNode }) {
   const [courseModel, setCourseModel] = useState<CourseModel>(BASELINE_DSA_COURSE);
-  const [analysisSource, setAnalysisSource] = useState<"gemini" | "baseline">("baseline");
+  const [learningGoalValue, setLearningGoalValue] = useState("");
+  const [analysisSource, setAnalysisSource] = useState<AISource>("baseline");
   const [analysisStatus, setAnalysisStatus] = useState<"idle" | "analyzing" | "success" | "error">("idle");
   const [analysisError, setAnalysisError] = useState<string | null>(null);
-  const [assessmentSource, setAssessmentSource] = useState<"gemini" | "baseline">("baseline");
-  const [tutorSource, setTutorSource] = useState<"gemini" | "baseline">("baseline");
+  const [assessmentSource, setAssessmentSource] = useState<AISource>("baseline");
+  const [tutorSource, setTutorSource] = useState<AISource>("baseline");
 
-  const [knowledgeScores, setKnowledgeScores] = useState<Record<string, number>>(INITIAL_SCORES);
+  const [knowledgeScores, setKnowledgeScores] = useState<Record<string, number>>(() => createInitialScores());
+  const [masteryBaseline, setMasteryBaseline] = useState<Record<string, number>>(() => createInitialScores());
+  const [evidence, setEvidence] = useState<LearningEvidence[]>([]);
+  const [assessmentHistory, setAssessmentHistory] = useState<AssessmentHistoryEntry[]>([]);
   const [syllabusAnalyzed, setSyllabusAnalyzed] = useState(true);
   const [uploadedMaterialsCount, setUploadedMaterialsCount] = useState(3);
   const [assessmentCompleted, setAssessmentCompleted] = useState(false);
   const [tutorPracticeCompleted, setTutorPracticeCompleted] = useState(false);
+  const [lessonCompletedTopics, setLessonCompletedTopics] = useState<string[]>([]);
   const [planAdapted, setPlanAdapted] = useState(false);
-  const [planSource, setPlanSource] = useState<"gemini" | "baseline">("baseline");
+  const [planSource, setPlanSource] = useState<AISource>("baseline");
   const [planTasks, setPlanTasks] = useState<PlanTask[]>(INITIAL_PLAN_TASKS);
+  const [isSampleData, setIsSampleData] = useState(true);
+  const [noteItems, setNoteItems] = useState<NoteLearningItem[]>([]);
+  const [gamification, setGamification] = useState<GamificationState>(INITIAL_GAMIFICATION_STATE);
+  const [persistenceReady, setPersistenceReady] = useState(false);
+  const [persistenceError, setPersistenceError] = useState(false);
 
-  // Dynamically derive current weak topic based on knowledgeScores
-  let calculatedWeakTopic = "Graphs";
+  useEffect(() => {
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      try {
+        const loaded = loadLearningState(window.localStorage, createInitialProfile());
+        const saved = loaded.state;
+        if (cancelled) return;
+        setCourseModel(saved.courseModel);
+        setLearningGoalValue(saved.learningGoal);
+        setAnalysisSource(saved.analysisSource);
+        setAssessmentSource(saved.assessmentSource);
+        setTutorSource(saved.tutorSource);
+        setPlanSource(saved.planSource);
+        setKnowledgeScores(saved.knowledgeScores);
+        setMasteryBaseline(saved.masteryBaseline);
+        setEvidence(saved.evidence);
+        setAssessmentHistory(saved.assessmentHistory);
+        setSyllabusAnalyzed(saved.syllabusAnalyzed);
+        setUploadedMaterialsCount(saved.uploadedMaterialsCount);
+        setAssessmentCompleted(saved.assessmentCompleted);
+        setTutorPracticeCompleted(saved.tutorPracticeCompleted);
+        setLessonCompletedTopics(saved.lessonCompletedTopics);
+        setPlanAdapted(saved.planAdapted);
+        setPlanTasks(saved.planTasks);
+        setIsSampleData(saved.isSampleData);
+        setNoteItems(saved.noteItems);
+        setGamification(saved.gamification);
+        setPersistenceError(loaded.status === "unavailable" || loaded.status === "invalid");
+        setPersistenceReady(true);
+      } catch {
+        if (cancelled) return;
+        setPersistenceError(true);
+        setPersistenceReady(true);
+      }
+    }, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!persistenceReady) return;
+    const snapshot: PersistedLearningState = {
+      version: 1,
+      courseModel,
+      learningGoal: learningGoalValue,
+      analysisSource,
+      assessmentSource,
+      tutorSource,
+      planSource,
+      knowledgeScores,
+      masteryBaseline,
+      evidence,
+      assessmentHistory,
+      syllabusAnalyzed,
+      uploadedMaterialsCount,
+      assessmentCompleted,
+      tutorPracticeCompleted,
+      lessonCompletedTopics,
+      planAdapted,
+      planTasks,
+      isSampleData,
+      noteItems,
+      gamification,
+    };
+    let saved = false;
+    try {
+      saved = saveLearningState(window.localStorage, snapshot);
+    } catch {
+      saved = false;
+    }
+    window.setTimeout(() => setPersistenceError(!saved), 0);
+  }, [
+    persistenceReady,
+    courseModel,
+    learningGoalValue,
+    analysisSource,
+    assessmentSource,
+    tutorSource,
+    planSource,
+    knowledgeScores,
+    masteryBaseline,
+    evidence,
+    assessmentHistory,
+    syllabusAnalyzed,
+    uploadedMaterialsCount,
+    assessmentCompleted,
+    tutorPracticeCompleted,
+    lessonCompletedTopics,
+    planAdapted,
+    planTasks,
+    isSampleData,
+    noteItems,
+    gamification,
+  ]);
+
+  // Dynamically derive active topics from the current courseModel
+  const activeTopicNames = useMemo(() => {
+    if (Array.isArray(courseModel.topics) && courseModel.topics.length > 0) return courseModel.topics.map((topic) => topic.name);
+    return courseModel.courseName === BASELINE_DSA_COURSE.courseName
+      ? ["Arrays", "Linked Lists", "Stacks", "Trees", "Hashing", "Graphs"]
+      : [];
+  }, [courseModel.courseName, courseModel.topics]);
+
+  // Find lowest scoring topic among active topics
+  let calculatedWeakTopic = activeTopicNames[activeTopicNames.length - 1] || (courseModel.courseName === BASELINE_DSA_COURSE.courseName ? "Graphs" : "Course overview");
   let minScore = 999;
-  const canonicalOrder = ["Arrays", "Linked Lists", "Stacks", "Trees", "Hashing", "Graphs"];
 
-  canonicalOrder.forEach((t) => {
+  activeTopicNames.forEach((t) => {
     const s = knowledgeScores[t];
     if (typeof s === "number" && s < minScore) {
       minScore = s;
@@ -137,8 +343,11 @@ export function LearningProvider({ children }: { children: ReactNode }) {
   }
 
   // Derived topics with dynamic mastery and priority indicator for primary gap
-  const topics: TopicMastery[] = canonicalOrder.map((name) => {
-    const mastery = knowledgeScores[name] ?? INITIAL_SCORES[name] ?? 50;
+  const topics: TopicMastery[] = activeTopicNames.map((name, index) => {
+    let mastery = knowledgeScores[name];
+    if (typeof mastery !== "number") {
+      mastery = INITIAL_SCORES[name] ?? Math.max(30, 85 - index * 9);
+    }
     return {
       name,
       mastery,
@@ -153,28 +362,72 @@ export function LearningProvider({ children }: { children: ReactNode }) {
     values.reduce((sum, v) => sum + v, 0) / (values.length || 1)
   );
 
-  const currentPriority =
-    calculatedWeakTopic === "Graphs"
-      ? "Graph Traversal"
-      : `${calculatedWeakTopic} Mastery`;
+  const weakTopicModel = courseModel.topics.find((t) => t.name === calculatedWeakTopic);
+  const weakSubtopics = weakTopicModel?.subtopics || [];
+
+  const currentPriority = `${calculatedWeakTopic} Mastery`;
 
   const currentFocus =
-    calculatedWeakTopic === "Graphs"
+    weakSubtopics.length > 0
+      ? weakSubtopics.slice(0, 3)
+      : activeTopicNames.length === 0
+      ? []
+      : calculatedWeakTopic === "Graphs"
       ? ["BFS", "DFS", "Graph Applications"]
       : calculatedWeakTopic === "Hashing"
       ? ["Collision Resolution", "Open Addressing", "Hash Functions"]
       : calculatedWeakTopic === "Trees"
       ? ["Binary Search Trees", "Tree Traversal", "Inorder Invariants"]
-      : [`${calculatedWeakTopic} Concepts`, "Edge Cases", "Complexity"];
+      : [`${calculatedWeakTopic} Concepts`, "Core Principles", "Applied Analysis"];
 
   const currentGap =
-    calculatedWeakTopic === "Graphs"
+    weakSubtopics.length > 0
+      ? `${weakSubtopics.slice(0, 2).join(" & ")} principles and application constraints`
+      : activeTopicNames.length === 0
+      ? "No topic headings were detected in the uploaded material"
+      : calculatedWeakTopic === "Graphs"
       ? "BFS / DFS traversal & shortest-path exploration"
       : calculatedWeakTopic === "Hashing"
       ? "Hash table collision resolution & load balancing"
       : calculatedWeakTopic === "Trees"
       ? "Binary search tree invariants and recursive traversals"
       : `${calculatedWeakTopic} structure and application constraints`;
+
+  const today = localDateKey();
+  const weeklyLearningDays = useMemo(() => {
+    return weeklyActiveDays(gamification.activityDates, today);
+  }, [gamification.activityDates, today]);
+
+  const claimDailyQuest = useCallback((questId: DailyQuestId) => {
+    const quest = getDailyQuests({ evidence, assessmentHistory, noteItems, gamification }, today)
+      .find((item) => item.id === questId);
+    if (!quest?.complete || quest.claimed) return false;
+    setGamification((current) => awardLearningEvent(current, {
+      id: `daily-quest:${today}:${questId}`,
+      kind: "dailyQuest",
+      localDate: today,
+      badge: "Daily quest complete",
+    }).state);
+    return true;
+  }, [evidence, assessmentHistory, noteItems, gamification, today]);
+
+  const setLearningGoal = useCallback((goal: string) => {
+    setLearningGoalValue(goal.trim().slice(0, 500));
+  }, []);
+
+  const recordLearningEvidence = useCallback((item: LearningEvidence) => {
+    const courseTopic = courseModel.topics.find((topic) => topic.name.trim().toLowerCase() === item.topic?.trim().toLowerCase());
+    if (!courseTopic || !item.eventId || item.eventId.length > 180 || !item.activityId || item.activityId.length > 180 ||
+      !item.questionId || item.questionId.length > 180 || !Number.isInteger(item.selectedOption) ||
+      item.selectedOption < 0 || item.selectedOption > 3 || typeof item.correct !== "boolean" ||
+      !["assessment", "tutor-practice", "note2learn-quiz"].includes(item.kind)) return;
+    const safeItem = { ...item, topic: courseTopic.name };
+    const nextEvidence = upsertLearningEvidence(evidence, safeItem);
+    const nextScores = estimateMasteryFromEvidence(masteryBaseline, nextEvidence);
+    setEvidence(nextEvidence);
+    setKnowledgeScores(nextScores);
+    setGamification((current) => awardCrossedMasteries(current, knowledgeScores, nextScores, courseModel.courseName));
+  }, [evidence, masteryBaseline, knowledgeScores, courseModel]);
 
   const markSyllabusAnalyzed = useCallback((count = 3) => {
     setSyllabusAnalyzed(true);
@@ -187,101 +440,255 @@ export function LearningProvider({ children }: { children: ReactNode }) {
       source,
       materialsCount,
       error,
+      learningGoal,
+      isSampleData: sampleData = false,
     }: {
       courseModel: CourseModel;
-      source: "gemini" | "baseline";
+      source: AISource;
       materialsCount?: number;
       error?: string;
+      learningGoal?: string;
+      isSampleData?: boolean;
     }) => {
       setCourseModel(newModel);
+      const newScores = createInitialScores(newModel);
+      setMasteryBaseline(newScores);
+      setKnowledgeScores(newScores);
+      setEvidence([]);
+      setAssessmentHistory([]);
+      const newTopics = newModel.topics || [];
       setAnalysisSource(source);
       setAnalysisStatus(error && source === "baseline" ? "error" : "success");
       setAnalysisError(error || null);
       setSyllabusAnalyzed(true);
+      setLearningGoalValue((learningGoal ?? learningGoalValue).trim().slice(0, 500));
+      setIsSampleData(sampleData);
       if (typeof materialsCount === "number") {
         setUploadedMaterialsCount(materialsCount);
       }
+
+      // Reset or align assessment/tutor/plan to the new subject
+      setAssessmentCompleted(false);
+      setTutorPracticeCompleted(false);
+      setLessonCompletedTopics([]);
+      setPlanAdapted(false);
+      setAssessmentSource("baseline");
+      setTutorSource("baseline");
+      setPlanSource("baseline");
+
+      // Generate aligned initial plan tasks for the new subject
+      const firstTopic = newTopics[0]?.name || "Core Fundamentals";
+      const weakTopic = newTopics[newTopics.length - 1]?.name || newTopics[0]?.name || "Advanced Topics";
+      const midTopic = newTopics[Math.floor(newTopics.length / 2)]?.name || firstTopic;
+
+      if (source === "baseline" && !sampleData) {
+        const outlineTasks = newTopics.length
+          ? newTopics.slice(0, 5).map((topic, index) => ({
+              id: `outline-${index + 1}`,
+              title: `Study ${topic.name}`,
+              detail: "Detected in your source outline. Use the Tutor for an explanation and practice check.",
+              duration: "10 min",
+              kind: index === 0 ? "Warm up" as const : "Focus topic" as const,
+              done: false,
+            }))
+          : [{
+              id: "outline-review",
+              title: "Review the extracted material",
+              detail: "No explicit topic headings were detected. Add a structured outline or configure an AI provider for deeper analysis.",
+              duration: "10 min",
+              kind: "Warm up" as const,
+              done: false,
+            }];
+        setPlanTasks(outlineTasks);
+        return;
+      }
+
+      setPlanTasks([
+        {
+          id: "task-1",
+          title: `Review ${firstTopic} Fundamentals`,
+          detail: `Foundational concepts and principles in ${newModel.courseName}`,
+          duration: "10 min",
+          kind: "Warm up",
+          done: false,
+        },
+        {
+          id: "task-2",
+          title: `Remediate ${weakTopic}`,
+          detail: `Focus on conceptual breakdown and core mechanics of ${weakTopic}`,
+          duration: "20 min",
+          kind: "Focus topic",
+          done: false,
+        },
+        {
+          id: "task-3",
+          title: `Practice ${midTopic}`,
+          detail: `Apply core operations and problem solving in ${midTopic}`,
+          duration: "15 min",
+          kind: "Apply",
+          done: false,
+        },
+        {
+          id: "task-4",
+          title: `Master ${weakTopic} Applications`,
+          detail: `Advanced synthesis and practice challenge`,
+          duration: "15 min",
+          kind: "Reinforce",
+          done: false,
+        },
+      ]);
     },
-    []
+    [learningGoalValue]
   );
 
-  const updateAssessmentMastery = useCallback((scores: Record<string, number>) => {
-    setKnowledgeScores(scores);
+  const completeAssessmentAttempt = useCallback((entry: AssessmentHistoryEntry) => {
+    if (!entry.id || entry.id.length > 180 || !Number.isFinite(Date.parse(entry.completedAt)) ||
+      !Number.isInteger(entry.questionCount) || entry.questionCount < 1 || entry.questionCount > 100 ||
+      !Number.isInteger(entry.attemptedCount) || entry.attemptedCount < 1 || entry.attemptedCount > entry.questionCount ||
+      !Number.isInteger(entry.correctCount) || entry.correctCount < 0 || entry.correctCount > entry.attemptedCount) return;
+    setAssessmentHistory((current) => current.some((item) => item.id === entry.id)
+      ? current
+      : [...current, entry].slice(-100));
     setAssessmentCompleted(true);
-  }, []);
+    setGamification((current) => awardLearningEvent(current, {
+      id: `diagnostic:${entry.id}`,
+      kind: "diagnostic",
+      localDate: today,
+      badge: "Diagnostic complete",
+    }).state);
+  }, [today]);
 
   const completeTutorPractice = useCallback((topicName?: string) => {
     setTutorPracticeCompleted(true);
-    setKnowledgeScores((prev) => {
-      let target = topicName;
-      if (!target) {
-        let lowest = "Graphs";
-        let minS = 100;
-        Object.entries(prev).forEach(([t, s]) => {
-          if (s < minS) {
-            minS = s;
-            lowest = t;
-          }
-        });
-        target = lowest;
-      }
-      const current = prev[target] ?? 31;
-      const boosted = Math.min(95, Math.max(74, current + 43));
-      return {
-        ...prev,
-        [target]: boosted,
-      };
-    });
-    // Adapt plan flag
-    setPlanAdapted(true);
-    setPlanTasks((current) => {
-      // If still baseline DSA tasks, load adapted baseline tasks
-      if (current === INITIAL_PLAN_TASKS || current[0]?.id === "task-1") {
-        return ADAPTED_PLAN_TASKS;
-      }
-      return current;
-    });
+    const topic = topicName || calculatedWeakTopic;
+    setGamification((current) => awardLearningEvent(current, {
+      id: `tutor-practice:${courseModel.courseName}:${topic}`,
+      kind: "practice",
+      localDate: today,
+      badge: "First practice complete",
+    }).state);
+  }, [calculatedWeakTopic, courseModel.courseName, today]);
+
+  const markTutorLessonCompleted = useCallback((topic: string) => {
+    const cleanTopic = topic.trim().slice(0, 120);
+    if (!cleanTopic) return;
+    setLessonCompletedTopics((current) => current.includes(cleanTopic) ? current : [...current, cleanTopic]);
+    setGamification((current) => awardLearningEvent(current, {
+      id: `tutor-lesson:${courseModel.courseName}:${cleanTopic}`,
+      kind: "lesson",
+      localDate: today,
+      badge: "First lesson complete",
+    }).state);
+  }, [courseModel.courseName, today]);
+
+  const addNoteItem = useCallback((item: NoteLearningItem) => {
+    setNoteItems((current) => [item, ...current.filter((note) => note.id !== item.id)].slice(0, 40));
   }, []);
 
-  const togglePlanTask = useCallback((taskId: string) => {
-    setPlanTasks((current) =>
-      current.map((t) => (t.id === taskId ? { ...t, done: !t.done } : t))
-    );
+  const updateNoteItem = useCallback((id: string, update: Partial<NoteLearningItem>) => {
+    setNoteItems((current) => current.map((item) => item.id === id ? { ...item, ...update } : item));
   }, []);
 
-  const resetSessionPlan = useCallback(() => {
-    setPlanTasks((current) => current.map((t) => ({ ...t, done: false })));
+  const toggleFlashcardMastery = useCallback((noteId: string, flashcardId: string) => {
+    setNoteItems((current) => current.map((item) => item.id !== noteId ? item : {
+      ...item,
+      flashcards: item.flashcards.map((card) => card.id === flashcardId ? { ...card, mastered: !card.mastered } : card),
+    }));
   }, []);
+
+  const completeNoteQuiz = useCallback((noteId: string) => {
+    const note = noteItems.find((item) => item.id === noteId);
+    if (!note || note.completedAt || note.quiz.some((_, index) => !Number.isInteger(note.answers[String(index)]))) return;
+    const correctCount = note.quiz.filter((question, index) => note.answers[String(index)] === question.correctOption).length;
+    const completedAt = new Date().toISOString();
+    setNoteItems((current) => current.map((item) => item.id === noteId
+      ? { ...item, completedAt, quizScore: correctCount }
+      : item));
+
+    const courseTopic = courseModel.topics.find((topic) => topic.name.trim().toLowerCase() === note.topic.trim().toLowerCase());
+    const nextEvidence = courseTopic
+      ? note.quiz.reduce((current, question, index) => upsertLearningEvidence(current, {
+          eventId: `note2learn:${note.id}:${question.id}`,
+          activityId: `note2learn:${note.id}`,
+          kind: "note2learn-quiz",
+          questionId: question.id,
+          topic: courseTopic.name,
+          selectedOption: note.answers[String(index)],
+          correct: note.answers[String(index)] === question.correctOption,
+          recordedAt: completedAt,
+        }), evidence)
+      : evidence;
+    const nextScores = courseTopic ? estimateMasteryFromEvidence(masteryBaseline, nextEvidence) : knowledgeScores;
+    if (courseTopic) {
+      setEvidence(nextEvidence);
+      setKnowledgeScores(nextScores);
+      setPlanAdapted(true);
+    }
+    setGamification((current) => {
+      const quizReward = awardLearningEvent(current, {
+        id: `note-quiz:${note.id}`,
+        kind: "noteQuiz",
+        localDate: today,
+        badge: "Note2Learn quiz complete",
+      }).state;
+      return awardCrossedMasteries(quizReward, knowledgeScores, nextScores, courseModel.courseName);
+    });
+  }, [noteItems, evidence, masteryBaseline, knowledgeScores, courseModel, today]);
 
   const resetEntireDemo = useCallback(() => {
-    setKnowledgeScores(INITIAL_SCORES);
-    setSyllabusAnalyzed(true);
-    setUploadedMaterialsCount(3);
-    setAssessmentCompleted(false);
-    setTutorPracticeCompleted(false);
-    setPlanAdapted(false);
-    setPlanSource("baseline");
-    setPlanTasks(INITIAL_PLAN_TASKS);
-    setCourseModel(BASELINE_DSA_COURSE);
-    setAnalysisSource("baseline");
-    setAssessmentSource("baseline");
-    setTutorSource("baseline");
+    const initial = createInitialProfile();
+    let cleared = false;
+    try {
+      cleared = clearLearningState(window.localStorage);
+    } catch {
+      cleared = false;
+    }
+    setCourseModel(initial.courseModel);
+    setLearningGoalValue(initial.learningGoal);
+    setKnowledgeScores(initial.knowledgeScores);
+    setMasteryBaseline(initial.masteryBaseline);
+    setEvidence(initial.evidence);
+    setAssessmentHistory(initial.assessmentHistory);
+    setSyllabusAnalyzed(initial.syllabusAnalyzed);
+    setUploadedMaterialsCount(initial.uploadedMaterialsCount);
+    setAssessmentCompleted(initial.assessmentCompleted);
+    setTutorPracticeCompleted(initial.tutorPracticeCompleted);
+    setLessonCompletedTopics(initial.lessonCompletedTopics);
+    setPlanAdapted(initial.planAdapted);
+    setPlanSource(initial.planSource);
+    setPlanTasks(initial.planTasks);
+    setIsSampleData(initial.isSampleData);
+    setNoteItems(initial.noteItems);
+    setGamification(initial.gamification);
+    setAnalysisSource(initial.analysisSource);
+    setAssessmentSource(initial.assessmentSource);
+    setTutorSource(initial.tutorSource);
     setAnalysisStatus("idle");
     setAnalysisError(null);
+    setPersistenceError(!cleared);
   }, []);
 
   return (
     <LearningContext.Provider
       value={{
         courseModel,
+        currentSubject: courseModel.courseName,
         analysisSource,
         analysisStatus,
         analysisError,
+        learningGoal: learningGoalValue,
+        setLearningGoal,
+        isSampleData,
+        persistenceReady,
+        persistenceError,
         assessmentSource,
         setAssessmentSource,
         tutorSource,
         setTutorSource,
         knowledgeScores,
+        evidence,
+        assessmentHistory,
+        lessonCompletedTopics,
         topics,
         overallMastery,
         weakestTopic: calculatedWeakTopic,
@@ -298,16 +705,39 @@ export function LearningProvider({ children }: { children: ReactNode }) {
         setPlanSource,
         planTasks,
         setPlanTasks,
+        gamification,
+        weeklyLearningDays,
+        claimDailyQuest,
+        noteItems,
         markSyllabusAnalyzed,
         setCourseAnalysis,
-        updateAssessmentMastery,
+        recordLearningEvidence,
+        completeAssessmentAttempt,
         completeTutorPractice,
-        togglePlanTask,
-        resetSessionPlan,
+        markTutorLessonCompleted,
+        addNoteItem,
+        updateNoteItem,
+        completeNoteQuiz,
+        toggleFlashcardMastery,
         resetEntireDemo,
       }}
     >
-      {children}
+      {persistenceReady ? (
+        <>
+          {persistenceError && (
+            <div className="mx-auto mt-3 max-w-5xl px-4" role="status">
+              <p className="rounded-xl border border-border bg-surface px-4 py-3 text-xs text-muted">
+                LearnOS could not save progress in this browser. Your current session still works; keep this tab open until storage is available.
+              </p>
+            </div>
+          )}
+          {children}
+        </>
+      ) : (
+        <main className="grid min-h-[calc(100vh-72px)] place-items-center px-6 text-sm text-muted" role="status">
+          Restoring your local learning profile…
+        </main>
+      )}
     </LearningContext.Provider>
   );
 }

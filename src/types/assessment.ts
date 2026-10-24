@@ -42,9 +42,11 @@ export interface GenerateAssessmentBatchRequest {
   useSample?: boolean;
 }
 
+import type { AISource } from "@/lib/ai/types";
+
 export interface GenerateAssessmentBatchResponse {
   questions: Question[];
-  source: "gemini" | "baseline";
+  source: AISource;
   message: string;
   model?: string;
   latencyMs?: number;

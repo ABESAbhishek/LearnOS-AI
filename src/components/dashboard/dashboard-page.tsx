@@ -6,8 +6,11 @@ import {
   BookOpen,
   CalendarDays,
   ClipboardCheck,
+  Flame,
+  MessageCircleHeart,
   RotateCcw,
   Sparkles,
+  Trophy,
 } from "lucide-react";
 import { AiActivity } from "@/components/motion/ai-activity";
 import { ProgressBar } from "@/components/motion/progress-bar";
@@ -17,26 +20,33 @@ import {
 } from "@/components/dashboard/dashboard-components";
 import { useLearning } from "@/context/learning-context";
 import { useAuth } from "@/context/auth-context";
+import { getNextXPMilestone, WEEKLY_LEARNING_GOAL_DAYS } from "@/lib/reward-rules";
+import { LearningStories } from "@/components/features/learning-stories";
 
 const LEARNING_STEPS = ["ASSESS", "LEARN", "PRACTICE", "ANALYZE", "ADAPT"];
 
 export default function DashboardPage() {
   const {
+    courseModel,
     topics,
     knowledgeScores,
     overallMastery,
+    weakestTopic,
     currentPriority,
     currentFocus,
     planTasks,
     planAdapted,
     tutorPracticeCompleted,
+    assessmentCompleted,
+    isSampleData,
+    gamification,
+    weeklyLearningDays,
     resetEntireDemo,
   } = useLearning();
   const { studentName } = useAuth();
 
-  const graphScore = knowledgeScores.Graphs ?? 31;
-  const isGraphGap = graphScore < 60;
-  const completedTasksCount = planTasks.filter((t) => t.done).length;
+  const weakScore = knowledgeScores[weakestTopic] ?? (knowledgeScores.Graphs ?? 31);
+  const isWeakGap = weakScore < 60;
 
   return (
     <main
@@ -54,18 +64,18 @@ export default function DashboardPage() {
             className="hero-sequence motion-reveal motion-reveal--node text-[11px] font-semibold uppercase tracking-[0.19em] text-accent"
             data-motion-reveal
           >
-            Learning overview <span className="px-1.5 text-border">/</span> DSA
+            Learning overview <span className="px-1.5 text-border">/</span> {courseModel.courseName}
           </p>
 
-          {planAdapted && (
-            <button
-              type="button"
-              onClick={resetEntireDemo}
-              className="interactive inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1 text-xs text-muted hover:text-foreground"
-            >
-              <RotateCcw size={12} /> Reset demo to baseline
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => {
+              if (window.confirm("Reset this browser's LearnOS learning data and progress?")) resetEntireDemo();
+            }}
+            className="interactive inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1 text-xs text-muted hover:text-foreground"
+          >
+            <RotateCcw size={12} /> Reset learning data
+          </button>
         </div>
 
         <h1
@@ -81,7 +91,7 @@ export default function DashboardPage() {
           data-motion-reveal
         >
           {planAdapted
-            ? "Your learning path has adapted to your BFS practice."
+            ? `Your learning path has adapted to your ${weakestTopic} practice.`
             : "Your learning path is adapting to you."}
         </p>
 
@@ -89,9 +99,11 @@ export default function DashboardPage() {
           className="hero-sequence motion-reveal motion-reveal--node motion-delay-3 mt-1.5 text-sm text-muted"
           data-motion-reveal
         >
-          {planAdapted
-            ? "Graph Traversal mastery increased to 74%. Today's focus shifted to advanced applications."
-            : "Based on your recent assessment and diagnostic check-in."}
+          {isSampleData
+            ? "Sample DSA profile shown. Complete a diagnostic or practice session to build your own evidence."
+            : assessmentCompleted
+              ? `Based on ${topics.length} course topics and your latest learning evidence.`
+              : "Add course material or complete a diagnostic to begin building your learning profile."}
         </p>
 
         <div
@@ -135,7 +147,58 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {/* Focus Card: Graph Traversal */}
+      <section aria-label="Learning progress and milestones" className="motion-reveal motion-reveal--section mb-5 grid gap-3 sm:grid-cols-3" data-motion-reveal>
+        <article className="panel flex items-center gap-4 p-4 sm:p-5">
+          <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-accent-soft text-accent"><Trophy size={18} aria-hidden="true" /></span>
+          <div className="min-w-0">
+            <p className="font-mono text-2xl font-medium tracking-[-0.05em]">{gamification.xp} XP</p>
+            <p className="text-xs text-muted">
+              {getNextXPMilestone(gamification.xp) === null
+                ? "All XP milestones reached"
+                : `Next milestone: ${getNextXPMilestone(gamification.xp)! - gamification.xp} XP away`}
+            </p>
+          </div>
+        </article>
+        <article className="panel flex items-center gap-4 p-4 sm:p-5">
+          <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-background text-muted"><Flame size={18} aria-hidden="true" /></span>
+          <div className="min-w-0">
+            <p className="font-mono text-2xl font-medium tracking-[-0.05em]">{gamification.currentStreak} day{gamification.currentStreak === 1 ? "" : "s"}</p>
+            <p className="text-xs text-muted">Learning streak · best {gamification.bestStreak}</p>
+          </div>
+        </article>
+        <article className="panel p-4 sm:p-5">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs font-medium text-muted">Weekly learning goal</p>
+            <span className="font-mono text-xs text-accent">{weeklyLearningDays}/{WEEKLY_LEARNING_GOAL_DAYS} days</span>
+          </div>
+          <ProgressBar value={(weeklyLearningDays / WEEKLY_LEARNING_GOAL_DAYS) * 100} label="Weekly learning goal progress" className="mt-3 h-1.5" />
+          <p className="mt-2 text-[10px] text-muted">{gamification.badges.length} milestone{gamification.badges.length === 1 ? "" : "s"} earned</p>
+        </article>
+      </section>
+
+      <div className="mb-5 grid items-start gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+        <LearningStories />
+        <section className="panel panel-hover p-4 sm:p-5" aria-labelledby="companion-title">
+          <div className="flex items-center gap-3">
+            <span className="grid size-10 place-items-center rounded-xl bg-accent-soft text-accent"><MessageCircleHeart size={18} aria-hidden="true" /></span>
+            <div><p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted">LearnOS companion</p><h2 id="companion-title" className="mt-0.5 text-sm font-semibold">A little direction for today</h2></div>
+          </div>
+          <p className="mt-3 text-sm leading-5 text-muted">
+            {assessmentCompleted
+              ? tutorPracticeCompleted
+                ? `You have practice evidence for ${weakestTopic}. A quick review can help make the idea stick.`
+                : `${weakestTopic} is the next best place to focus based on your current answers.`
+              : "Start with a short diagnostic. Your answers will help LearnOS choose a useful next step."}
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Link href={assessmentCompleted ? "/tutor" : "/assessment"} className="button-primary interactive inline-flex min-h-9 items-center gap-2 rounded-lg bg-foreground px-3 text-xs font-semibold text-background hover:bg-accent">{assessmentCompleted ? "Open focused lesson" : "Start diagnostic"}<ArrowRight size={13} /></Link>
+            <Link href="/quests" className="interactive inline-flex min-h-9 items-center rounded-lg border border-border px-3 text-xs font-semibold text-foreground hover:border-accent hover:text-accent">Today&apos;s quests</Link>
+          </div>
+          <p className="mt-3 text-[10px] text-muted">Suggestions follow saved learner progress; this companion does not claim to be a live AI chat.</p>
+        </section>
+      </div>
+
+      {/* Current learning focus */}
       <section
         aria-labelledby="focus-title"
         className="panel panel-hover focus-card motion-reveal motion-reveal--card motion-delay-1 overflow-hidden"
@@ -149,7 +212,7 @@ export default function DashboardPage() {
               </p>
               <span className="inline-flex items-center gap-1.5 rounded-md bg-accent-soft px-2.5 py-1 text-[10px] font-medium text-accent">
                 <Sparkles aria-hidden="true" size={12} strokeWidth={1.8} />
-                {planAdapted ? "Mastery elevated" : "Recommended for you"}
+              {planAdapted ? "Updated from evidence" : "Recommended for you"}
               </span>
             </div>
 
@@ -157,17 +220,17 @@ export default function DashboardPage() {
               id="focus-title"
               className="focus-title mt-5 text-4xl font-medium tracking-[-0.055em] sm:text-5xl"
             >
-              {planAdapted ? "Advanced Graph Applications" : currentPriority}
+              {currentPriority}
             </h2>
 
             <p className="mt-3 max-w-xl text-sm leading-6 text-muted sm:text-base">
               {planAdapted
-                ? "You proved your BFS intuition in the AI Tutor. Now apply level traversal to Topological Sort & Grid Shortest Paths."
-                : "Your current focus based on your diagnostic check-in."}
+                ? `Your recent learning evidence moved ${weakestTopic} to the top of the next-step plan.`
+                : `Your current focus is ${weakestTopic}, the lowest estimated topic in this profile.`}
             </p>
 
             <div className="mt-5 flex flex-wrap gap-2" aria-label="Focus topics">
-              {(planAdapted ? ["Topological Sort", "Cycle Detection", "Grid BFS"] : currentFocus).map(
+              {currentFocus.map(
                 (topic) => (
                   <span
                     key={topic}
@@ -191,28 +254,28 @@ export default function DashboardPage() {
           <div className="flex flex-col justify-center border-t border-border pt-6 md:border-l md:border-t-0 md:pl-9 md:pt-0">
             <div className="flex items-end justify-between gap-4">
               <div>
-                <p className="text-xs text-muted">Graph mastery level</p>
+                <p className="text-xs text-muted">{weakestTopic} mastery level</p>
                 <p className="mt-2 text-5xl font-medium tracking-[-0.07em]">
-                  {graphScore}
+                  {weakScore}
                   <span className="ml-1 text-2xl text-muted">%</span>
                 </p>
               </div>
 
               <span className="mb-1 inline-flex items-center gap-2 text-xs font-medium text-accent">
                 <span className="size-1.5 rounded-full bg-accent" />
-                {isGraphGap ? "Needs attention" : "Target Met"}
+                {isWeakGap ? "Needs attention" : "Target Met"}
               </span>
             </div>
 
             <ProgressBar
-              value={graphScore}
-              label="Graph Traversal knowledge level"
+              value={weakScore}
+              label={`${weakestTopic} knowledge level`}
               className="mt-5 h-2"
-              tone={isGraphGap ? "accent" : "accent"}
+              tone={isWeakGap ? "accent" : "accent"}
             />
 
             <p className="mt-4 max-w-xs text-xs leading-5 text-muted">
-              {isGraphGap
+              {isWeakGap
                 ? "A little focused practice here can move your overall mastery forward."
                 : "Knowledge gap strengthened. Your schedule has updated with next-tier challenges."}
             </p>
@@ -236,7 +299,7 @@ export default function DashboardPage() {
                 Knowledge Profile
               </h2>
               <p className="mt-1.5 text-sm text-muted">
-                Your current understanding across the DSA syllabus.
+                Your current understanding across the {courseModel.courseName} syllabus.
               </p>
             </div>
             <Link
@@ -247,13 +310,13 @@ export default function DashboardPage() {
             </Link>
           </div>
 
-          <ul className="motion-stagger -mx-3 grid gap-1" aria-label="DSA topic mastery">
+          <ul className="motion-stagger -mx-3 grid gap-1" aria-label="Topic mastery list">
             {topics.map((topic) => (
               <KnowledgeTopic
                 key={topic.name}
                 name={topic.name}
                 value={topic.mastery}
-                priority={topic.name === "Graphs" && isGraphGap}
+                priority={topic.name === weakestTopic && isWeakGap}
               />
             ))}
           </ul>
@@ -286,8 +349,8 @@ export default function DashboardPage() {
 
           <p className="mt-3 text-sm leading-6 text-muted">
             {planAdapted
-              ? "Graph Traversal jumped from 31% to 74% after your verified BFS practice session. Your curriculum has updated."
-              : "Your graph traversal knowledge is currently your largest gap (31%). Let's strengthen BFS and DFS first."}
+              ? `Your latest responses produced a provisional ${weakestTopic} estimate of ${weakScore}%. The plan now prioritizes this topic.`
+              : `Your ${weakestTopic} estimate is ${weakScore}%, currently the lowest in this profile. Let's strengthen it with focused practice.`}
           </p>
 
           <div className="my-6 border-t border-border" />
@@ -328,8 +391,8 @@ export default function DashboardPage() {
             id="syllabus"
             href="/upload"
             label="Syllabus"
-            value="12 topics analyzed"
-            description="Across your DSA syllabus"
+            value={`${courseModel.topics.length} topics mapped`}
+            description={`Across ${courseModel.courseName}`}
             icon={BookOpen}
           />
 
@@ -338,7 +401,7 @@ export default function DashboardPage() {
             href="/assessment"
             label="Assessment"
             value={`${overallMastery}% current mastery`}
-            description="From your diagnostic profile"
+            description={isSampleData ? "Seeded sample starting profile" : assessmentCompleted ? "From your diagnostic and practice evidence" : "Initial estimate; no diagnostic yet"}
             icon={ClipboardCheck}
           />
 
@@ -346,8 +409,8 @@ export default function DashboardPage() {
             id="study-plan"
             href="/plan"
             label="Study Plan"
-            value={`${completedTasksCount} of ${planTasks.length} tasks`}
-            description={planAdapted ? "Adaptive sequence active" : "Focused daily session"}
+            value={`${planTasks.length} next steps`}
+            description={planAdapted ? "Evidence-informed sequence" : "Focused daily session"}
             icon={CalendarDays}
           />
         </div>

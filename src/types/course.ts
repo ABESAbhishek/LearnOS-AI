@@ -20,13 +20,40 @@ export interface CourseModel {
   highPriorityCount: number;
 }
 
+import type { AISource } from "@/lib/ai/types";
+import type { DocumentKnowledgeRepresentation, SourceDocument } from "@/types/document";
+
+export interface AnalyzedTopic {
+  name: string;
+  difficulty: "Beginner" | "Intermediate" | "Advanced";
+  priority: "Low" | "Medium" | "High";
+  frequency: number;
+  subtopics?: string[];
+  prerequisites?: string[];
+}
+
+export interface SyllabusAnalysisData {
+  courseName?: string;
+  subject?: string;
+  topics: AnalyzedTopic[];
+  concepts: number;
+  priorityAreas: number;
+  pyqCount: number;
+  summary: string;
+  documentKnowledge?: DocumentKnowledgeRepresentation;
+}
+
 export interface CourseAnalysisResponse {
+  source: AISource;
+  data: SyllabusAnalysisData;
   courseModel: CourseModel;
-  source: "gemini" | "baseline";
+  subject?: string;
   message: string;
   model?: string;
   latencyMs?: number;
   error?: string;
+  documents?: SourceDocument[];
+  knowledge?: DocumentKnowledgeRepresentation;
 }
 
 /**
@@ -213,5 +240,135 @@ export function normalizeCourseModel(raw: unknown): CourseModel {
     totalTopics: topics.length > 0 ? topics.length : BASELINE_DSA_COURSE.totalTopics,
     totalSubtopics: totalSubtopicsCount > 0 ? totalSubtopicsCount : BASELINE_DSA_COURSE.totalSubtopics,
     highPriorityCount: highPriority > 0 ? highPriority : BASELINE_DSA_COURSE.highPriorityCount,
+  };
+}
+
+/**
+ * Deterministic baseline syllabus analysis data matching prompt requirements.
+ */
+export const BASELINE_SYLLABUS_DATA: SyllabusAnalysisData = {
+  topics: [
+    { name: "Arrays", difficulty: "Beginner", priority: "High", frequency: 6 },
+    { name: "Linked Lists", difficulty: "Intermediate", priority: "Medium", frequency: 4 },
+    { name: "Stacks", difficulty: "Beginner", priority: "Medium", frequency: 5 },
+    { name: "Trees", difficulty: "Intermediate", priority: "High", frequency: 7 },
+    { name: "Hashing", difficulty: "Intermediate", priority: "High", frequency: 5 },
+    { name: "Graphs", difficulty: "Advanced", priority: "High", frequency: 8 },
+  ],
+  concepts: 24,
+  priorityAreas: 4,
+  pyqCount: 35,
+  summary: "Comprehensive Data Structures & Algorithms curriculum covering foundational linear structures through advanced graph representations and algorithms.",
+};
+
+/**
+ * Strict validator for SyllabusAnalysisData according to prompt requirements:
+ * - topics must be an array
+ * - every topic must have name
+ * - difficulty must be one of "Beginner" | "Intermediate" | "Advanced"
+ * - priority must be one of "Low" | "Medium" | "High"
+ * - frequency must be numeric
+ * - concepts must be numeric
+ * - priorityAreas must be numeric
+ * - pyqCount must be numeric
+ * - summary must be a string
+ */
+export function validateSyllabusAnalysisData(data: unknown): data is SyllabusAnalysisData {
+  if (!data || typeof data !== "object") return false;
+  const d = data as Record<string, unknown>;
+
+  // topics must be an array
+  if (!Array.isArray(d.topics) || d.topics.length === 0) return false;
+
+  // every topic validation
+  for (const item of d.topics) {
+    if (!item || typeof item !== "object") return false;
+    const t = item as Record<string, unknown>;
+
+    // name must be string
+    if (typeof t.name !== "string" || t.name.trim().length === 0) return false;
+
+    // difficulty must be one of the allowed values
+    const diff = typeof t.difficulty === "string" ? t.difficulty.trim() : "";
+    if (diff !== "Beginner" && diff !== "Intermediate" && diff !== "Advanced") {
+      return false;
+    }
+
+    // priority must be one of the allowed values
+    const prio = typeof t.priority === "string" ? t.priority.trim() : "";
+    if (prio !== "Low" && prio !== "Medium" && prio !== "High") {
+      return false;
+    }
+
+    // frequency must be numeric
+    if (typeof t.frequency !== "number" || isNaN(t.frequency)) {
+      return false;
+    }
+    if (t.subtopics !== undefined && (!Array.isArray(t.subtopics) || t.subtopics.length > 12 || !t.subtopics.every((value) => typeof value === "string" && value.trim().length > 0 && value.length <= 120))) return false;
+    if (t.prerequisites !== undefined && (!Array.isArray(t.prerequisites) || t.prerequisites.length > 12 || !t.prerequisites.every((value) => typeof value === "string" && value.trim().length > 0 && value.length <= 120))) return false;
+  }
+
+  // concepts must be numeric
+  if (typeof d.concepts !== "number" || isNaN(d.concepts)) return false;
+
+  // priorityAreas must be numeric
+  if (typeof d.priorityAreas !== "number" || isNaN(d.priorityAreas)) return false;
+
+  // pyqCount must be numeric
+  if (typeof d.pyqCount !== "number" || isNaN(d.pyqCount)) return false;
+
+  // summary must be a string
+  if (typeof d.summary !== "string" || d.summary.trim().length === 0) return false;
+
+  return true;
+}
+
+/**
+ * Maps structured SyllabusAnalysisData into the application CourseModel.
+ */
+export function syllabusDataToCourseModel(
+  data: SyllabusAnalysisData,
+  fallbackCourseName = "Custom Curriculum"
+): CourseModel {
+  const courseName =
+    (typeof data.courseName === "string" && data.courseName.trim().length > 0
+      ? data.courseName.trim()
+      : typeof data.subject === "string" && data.subject.trim().length > 0
+      ? data.subject.trim()
+      : fallbackCourseName) || "Custom Curriculum";
+
+  const topics: CourseTopic[] = data.topics.map((t, idx) => {
+    let diff: TopicDifficulty = "Intermediate";
+    if (t.difficulty === "Beginner") diff = "Foundational";
+    else if (t.difficulty === "Intermediate") diff = "Intermediate";
+    else if (t.difficulty === "Advanced") diff = "Advanced";
+
+    let imp: TopicImportance = "Medium";
+    if (t.priority === "High") imp = "High";
+    else if (t.priority === "Medium") imp = "Medium";
+    else if (t.priority === "Low") imp = "Low";
+
+    return {
+      name: t.name.trim(),
+      subtopics: t.subtopics?.length ? t.subtopics.slice(0, 12).map((item) => item.trim()).filter(Boolean) : [
+        `${t.name.trim()} Fundamentals`,
+        `${t.name.trim()} Core Operations`,
+        `${t.name.trim()} Problem Solving & Applications`,
+      ],
+      difficulty: diff,
+      prerequisites: t.prerequisites?.slice(0, 12).map((item) => item.trim()).filter(Boolean) ?? (idx > 0 ? [data.topics[idx - 1].name.trim()] : []),
+      importance: imp,
+      studyOrder: idx + 1,
+      frequency: Math.min(10, Math.max(1, Math.round(t.frequency))),
+    };
+  });
+
+  return {
+    courseName,
+    description: data.summary,
+    topics,
+    totalTopics: data.topics.length,
+    totalSubtopics: data.concepts,
+    highPriorityCount: data.priorityAreas,
   };
 }

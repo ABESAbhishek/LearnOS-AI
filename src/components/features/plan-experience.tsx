@@ -2,16 +2,13 @@
 
 import { useEffect, useRef } from "react";
 import Link from "next/link";
-import { ArrowRight, Check, Clock3, RefreshCw, Sparkles } from "lucide-react";
+import { ArrowRight, Clock3, Sparkles } from "lucide-react";
 import { FeatureFrame, FeatureHeading, SectionLabel } from "@/components/features/feature-frame";
-import { ProgressBar } from "@/components/motion/progress-bar";
 import { useLearning } from "@/context/learning-context";
 
 export function PlanExperience() {
   const {
     planTasks,
-    togglePlanTask,
-    resetSessionPlan,
     planAdapted,
     setPlanAdapted,
     planSource,
@@ -22,13 +19,12 @@ export function PlanExperience() {
     currentPriority,
     topics,
     assessmentCompleted,
+    evidence,
     tutorPracticeCompleted,
+    isSampleData,
   } = useLearning();
 
-  const completeCount = planTasks.filter((task) => task.done).length;
-  const progress = Math.round((completeCount / (planTasks.length || 1)) * 100);
   const weakestScore = knowledgeScores[weakestTopic] ?? 31;
-  const graphMastery = knowledgeScores.Graphs ?? 31;
 
   const totalMinutes = planTasks.reduce((sum, t) => {
     const match = t.duration.match(/\d+/);
@@ -43,14 +39,14 @@ export function PlanExperience() {
     const hasMeaningfulSignal =
       assessmentCompleted ||
       tutorPracticeCompleted ||
-      weakestTopic !== "Graphs";
+      evidence.length > 0;
 
     if (!hasMeaningfulSignal) {
       return;
     }
 
     const currentWeakScore = knowledgeScores[weakestTopic] ?? 31;
-    const fingerprint = `${weakestTopic}|${tutorPracticeCompleted}|${assessmentCompleted}|${currentWeakScore}`;
+    const fingerprint = `${weakestTopic}|${tutorPracticeCompleted}|${assessmentCompleted}|${currentWeakScore}|${evidence.length}`;
 
     if (lastFingerprintRef.current === fingerprint || isFetchingRef.current) {
       return;
@@ -80,10 +76,8 @@ export function PlanExperience() {
       .then((data) => {
         if (data && Array.isArray(data.tasks) && data.tasks.length === 4) {
           setPlanTasks(data.tasks);
-          setPlanSource(data.source === "gemini" ? "gemini" : "baseline");
-          if (tutorPracticeCompleted || data.source === "gemini") {
-            setPlanAdapted(true);
-          }
+          setPlanSource(data.source !== "baseline" ? data.source : "baseline");
+          setPlanAdapted(true);
         }
       })
       .catch(() => {
@@ -96,6 +90,7 @@ export function PlanExperience() {
     weakestTopic,
     tutorPracticeCompleted,
     assessmentCompleted,
+    evidence,
     knowledgeScores,
     currentPriority,
     topics,
@@ -115,21 +110,19 @@ export function PlanExperience() {
         }
         description={
           planAdapted
-            ? weakestTopic === "Graphs"
-              ? "Because you mastered BFS queue traversal in the AI Tutor (Graphs now 74%), LearnOS has updated your schedule with advanced applications."
-              : `Because you completed targeted practice for ${weakestTopic} in the AI Tutor (${weakestTopic} now ${weakestScore}%), LearnOS has updated your schedule with advanced applications.`
-            : weakestTopic === "Graphs"
-            ? "Your plan puts Graph Traversal first because it is your highest-leverage gap (31%). Each task is sized to make steady progress feel possible."
-            : `Your plan puts ${weakestTopic} first because it is your highest-leverage gap (${weakestScore}%). Each task is sized to make steady progress feel possible.`
+            ? `Your latest responses put ${weakestTopic} at the top of the plan (${weakestScore}% estimated mastery). The estimate is provisional and will change as you practice.`
+            : isSampleData
+              ? `The seeded DSA profile puts ${weakestTopic} first (${weakestScore}% estimated mastery). Complete a diagnostic to replace these sample signals with your own evidence.`
+              : `The current course estimate puts ${weakestTopic} first (${weakestScore}%). Complete a diagnostic to build a profile from your own answers.`
         }
         aside={
           <div className="flex items-center gap-2 rounded-xl border border-border bg-surface px-3 py-2 text-xs">
-            {planSource === "gemini" && (
+            {planSource !== "baseline" && (
               <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
             )}
             <span className="font-semibold text-foreground">
-              {planSource === "gemini"
-                ? "Gemini Adaptive Plan"
+              {planSource !== "baseline"
+                ? "AI Adaptive Plan"
                 : planAdapted
                 ? "Adaptive Schedule"
                 : "Baseline Schedule"}
@@ -145,60 +138,27 @@ export function PlanExperience() {
         <section className="panel motion-reveal motion-reveal--section p-5 sm:p-8" data-motion-reveal>
           <div className="flex flex-wrap items-end justify-between gap-4">
             <div>
-              <SectionLabel>Today&apos;s adaptive sequence</SectionLabel>
+              <SectionLabel>Today&apos;s learning sequence</SectionLabel>
               <h2 className="mt-2 text-xl font-medium tracking-[-0.04em]">
-                {weakestTopic === "Graphs"
-                  ? planAdapted
-                    ? "Graph Traversal &middot; Advanced Applications"
-                    : "Graph Traversal &middot; Foundations"
-                  : `${weakestTopic} &middot; ${planAdapted ? "Advanced Applications" : "Foundations"}`}
+                {weakestTopic} &middot; {planAdapted ? "Evidence-informed sequence" : "Foundation sequence"}
               </h2>
             </div>
             <div className="flex items-center gap-3">
-              <span className="text-xs text-muted">
-                {completeCount} of {planTasks.length} complete
-              </span>
-              <span className="font-mono text-xs font-semibold text-accent">
-                {progress}%
-              </span>
+              <span className="text-xs text-muted">{planTasks.length} suggested next steps</span>
             </div>
-          </div>
-
-          <div className="mt-5">
-            <ProgressBar value={progress} label="Today's plan completion" className="h-2" />
           </div>
 
           <ol className="mt-6 grid gap-3" aria-label="Personalized daily study tasks">
             {planTasks.map((task) => (
               <li
                 key={task.id}
-                className={`motion-reveal motion-reveal--plan-item flex items-start gap-3 rounded-2xl border p-4 transition-colors sm:gap-4 sm:p-5 ${
-                  task.done
-                    ? "border-accent/35 bg-accent-soft/30"
-                    : "border-border bg-white/30 hover:border-foreground/30"
-                }`}
+                className="motion-reveal motion-reveal--plan-item flex items-start gap-3 rounded-2xl border border-border bg-white/30 p-4 transition-colors hover:border-foreground/30 sm:gap-4 sm:p-5"
                 data-motion-reveal
               >
-                <button
-                  type="button"
-                  onClick={() => togglePlanTask(task.id)}
-                  aria-label={task.done ? "Mark incomplete: " + task.title : "Complete: " + task.title}
-                  aria-pressed={task.done}
-                  className={`interactive mt-0.5 grid size-6 shrink-0 place-items-center rounded-full border transition-all ${
-                    task.done
-                      ? "border-accent bg-accent text-white"
-                      : "border-foreground/30 text-transparent hover:border-accent"
-                  }`}
-                >
-                  {task.done && <Check size={13} strokeWidth={2.4} aria-hidden="true" />}
-                </button>
-
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span
-                      className={`text-sm font-medium ${
-                        task.done ? "text-muted line-through decoration-foreground/25" : "text-foreground"
-                      }`}
+                      className="text-sm font-medium text-foreground"
                     >
                       {task.title}
                     </span>
@@ -218,6 +178,9 @@ export function PlanExperience() {
                 <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-muted">
                   <Clock3 size={12} aria-hidden="true" /> {task.duration}
                 </span>
+                <Link href="/tutor" className="interactive ml-auto inline-flex min-h-8 shrink-0 items-center gap-1 self-center rounded-lg border border-border px-2.5 text-[10px] font-semibold text-accent hover:border-accent">
+                  Open lesson <ArrowRight size={12} aria-hidden="true" />
+                </Link>
               </li>
             ))}
           </ol>
@@ -225,9 +188,7 @@ export function PlanExperience() {
           {/* Bottom Complete CTA */}
           <div className="mt-8 flex flex-col gap-3 border-t border-border pt-6 sm:flex-row sm:items-center sm:justify-between">
             <span className="text-xs text-muted">
-              {progress === 100
-                ? "All tasks complete for today. Your progress is reflected across LearnOS."
-                : `${planTasks.length - completeCount} tasks remaining in this focused block.`}
+              These are suggested next steps. Lesson and answer history records your completed learning activity.
             </span>
             <Link
               href="/dashboard"
@@ -244,24 +205,20 @@ export function PlanExperience() {
           <SectionLabel>Why this plan</SectionLabel>
           <h2 className="mt-3 text-xl font-medium leading-snug tracking-[-0.04em]">
             {planAdapted
-              ? "Adapted to your recent tutor victory."
-              : `A small step toward closing your ${weakestTopic === "Graphs" ? "Graph" : weakestTopic} gap.`}
+              ? "Prioritized from your recent learning evidence."
+              : `A focused start for your ${weakestTopic} topic.`}
           </h2>
           <p className="mt-3 text-sm leading-6 text-muted">
             {planAdapted
-              ? weakestTopic === "Graphs"
-                ? `You proved your BFS intuition in the AI Tutor. Graphs mastery moved from 31% to ${graphMastery}%. Your plan automatically shifted to shortest-path applications and cycle detection.`
-                : `You proved your understanding in the AI Tutor. ${weakestTopic} mastery moved to ${weakestScore}%. Your plan automatically shifted to advanced problem solving and synthesis.`
-              : weakestTopic === "Graphs"
-              ? "Your latest check-in showed Graph Traversal as your clearest opportunity (31%). This session moves from adjacency representations into BFS queue tracing."
-              : `Your latest check-in showed ${weakestTopic} as your clearest opportunity (${weakestScore}%). This session moves through targeted foundations into practical checks.`}
+              ? `${weakestTopic} currently has the lowest estimated mastery (${weakestScore}%). LearnOS orders these tasks around that topic and its course outline.`
+              : `${weakestTopic} is the lowest starting estimate (${weakestScore}%). These tasks begin with foundations and move toward application.`}
           </p>
 
           <div className="mt-6 rounded-xl bg-accent-soft/80 p-4">
             <div className="flex items-center gap-2 text-xs font-semibold text-accent">
               <Sparkles size={14} />
               <span>
-                {planSource === "gemini"
+                {planSource !== "baseline"
                   ? `AI Plan tailored for ${weakestTopic}`
                   : planAdapted
                   ? "Plan adapted by LearnOS"
@@ -271,18 +228,12 @@ export function PlanExperience() {
             <p className="mt-2 text-xs leading-5 text-muted">
               {planAdapted
                 ? "As you complete these practice items, LearnOS prepares the next diagnostic check-in."
-                : "Complete the AI Tutor session to see your plan adapt in real-time."}
+                : "Complete a diagnostic or targeted practice to adapt this plan from your learning evidence."}
             </p>
           </div>
 
           <div className="mt-6 flex items-center justify-between border-t border-border pt-4">
-            <button
-              type="button"
-              onClick={resetSessionPlan}
-              className="interactive inline-flex items-center gap-1.5 text-xs text-muted hover:text-foreground"
-            >
-              <RefreshCw size={12} aria-hidden="true" /> Reset tasks
-            </button>
+            <span className="text-[11px] text-muted">Start a step to open its lesson.</span>
             {!tutorPracticeCompleted ? (
               <Link
                 href="/tutor"

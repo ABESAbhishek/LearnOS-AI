@@ -1,5 +1,58 @@
 import type { AssessmentQuestion } from "@/types/assessment";
 
+export interface CourseBaselineTopic {
+  name: string;
+  subtopics?: string[];
+  difficulty?: string;
+}
+
+/**
+ * Builds a clearly limited course-map recall check when no AI question set is
+ * available. The built-in DSA sample continues to use its authored questions.
+ */
+export function buildCourseBaselineAssessmentQuestions(topics: readonly CourseBaselineTopic[]): AssessmentQuestion[] {
+  if (topics.length === 0) return [...BASELINE_ASSESSMENT_QUESTIONS];
+  const topicNames = new Set(topics.map((topic) => topic.name.toLowerCase()));
+  if (BASELINE_ASSESSMENT_QUESTIONS.every((question) => topicNames.has(question.topic.toLowerCase()))) {
+    return [...BASELINE_ASSESSMENT_QUESTIONS];
+  }
+
+  const conceptPool = [...new Set(topics.flatMap((topic) => topic.subtopics || []).map((item) => item.trim()).filter(Boolean))];
+  const fallbackOptions = ["A concept outside the supplied course map", "An unrelated study note", "A detail not listed in the syllabus"];
+
+  return Array.from({ length: 8 }, (_, index) => {
+    const topic = topics[index % topics.length];
+    const ownConcepts = (topic.subtopics || []).map((item) => item.trim()).filter(Boolean);
+    const answer = ownConcepts[index % Math.max(1, ownConcepts.length)] || topic.name;
+    const distractors = [...new Set(conceptPool.filter((item) => item.toLowerCase() !== answer.toLowerCase()))].slice(0, 3);
+    for (const fallback of fallbackOptions) {
+      if (distractors.length >= 3) break;
+      if (fallback.toLowerCase() !== answer.toLowerCase()) distractors.push(fallback);
+    }
+    while (distractors.length < 3) distractors.push(`Other concept ${distractors.length + 1}`);
+
+    const correctOption = index % 4;
+    const options = [...distractors];
+    options.splice(correctOption, 0, answer);
+    const difficulty = topic.difficulty === "Advanced"
+      ? "Advanced"
+      : topic.difficulty === "Intermediate"
+        ? "Intermediate"
+        : "Foundational";
+
+    return {
+      id: `course-map-${index + 1}`,
+      topic: topic.name,
+      subtopic: ownConcepts[index % Math.max(1, ownConcepts.length)] || topic.name,
+      difficulty,
+      prompt: `Which concept does the supplied course map place under ${topic.name}?`,
+      options,
+      correctOption,
+      explanation: `${answer} is listed under ${topic.name} in the supplied course map. This deterministic fallback checks syllabus recall, not deeper conceptual mastery.`,
+    };
+  });
+}
+
 /**
  * Deterministic baseline diagnostic question bank.
  * Preserves the canonical DSA demo experience and serves as offline fallback.
@@ -125,7 +178,7 @@ export const BASELINE_ASSESSMENT_QUESTIONS: AssessmentQuestion[] = [
   },
   {
     id: "dsa-sorting-01",
-    topic: "Sorting / Searching",
+    topic: "Searching",
     subtopic: "Binary Search Preconditions",
     conceptTested: "Monotonicity invariant requirement",
     difficulty: "Intermediate",
