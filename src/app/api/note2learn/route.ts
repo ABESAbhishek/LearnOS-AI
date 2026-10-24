@@ -43,12 +43,12 @@ export async function POST(request: NextRequest) {
     let extractedText = "";
     if (extension === ".pdf") {
       const bytes = Buffer.from(await file.arrayBuffer());
-      if (bytes.length < 5 || bytes.subarray(0, 4).toString("utf8") !== "%PDF") {
-        return jsonError("This file does not appear to be a readable PDF.", 400);
-      }
       const extraction = await extractTextFromPDF(bytes);
       extractedText = extraction.text;
-      if (!extraction.success || extractedText.trim().length < 20) {
+      if (!extraction.success) {
+        return jsonError(extraction.error || "The PDF is malformed, encrypted, or could not be parsed.", 422);
+      }
+      if (extractedText.trim().length < 20) {
         return jsonError("No selectable text was found. Scanned PDFs need OCR, which this demo does not provide.", 422);
       }
     } else {
@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
       jsonSchema: NOTE2LEARN_SCHEMA,
       baselineFallback: baseline,
       validator: validateGeneratedNoteContent,
-      timeoutMs: 10_000,
+      timeoutMs: 12_000,
     });
     const content = result.source !== "baseline" && validateGeneratedNoteContent(result.data)
       ? result.data

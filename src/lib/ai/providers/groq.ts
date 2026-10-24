@@ -3,6 +3,7 @@ import { sanitizeErrorMessage, extractAndParseJSON } from "@/lib/ai/sanitizer";
 import { readLimitedResponseJSON, readLimitedResponseText } from "@/lib/ai/response-reader";
 
 export const GROQ_MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
+export const GROQ_FALLBACK_MODEL = process.env.GROQ_FALLBACK_MODEL || "openai/gpt-oss-20b";
 const GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
 
 export const groqAdapter: AIProviderAdapter = {
@@ -41,9 +42,13 @@ export const groqAdapter: AIProviderAdapter = {
       const timeoutMs = req.timeoutMs ?? 10000;
       const messages: Array<{ role: "system" | "user"; content: string }> = [];
 
-      const systemPrompt = req.systemInstruction
+      let systemPrompt = req.systemInstruction
         ? `${req.systemInstruction}\n\nIMPORTANT: You must respond ONLY with a single valid, well-formed JSON object. Do not include markdown wrappers, markdown codeblocks, or any explanatory text.`
         : "You are a precise educational AI. You must respond ONLY with a single valid, well-formed JSON object. Do not include markdown codeblocks or conversational text.";
+
+      if (req.jsonSchema) {
+        systemPrompt += `\n\nJSON SCHEMA REQUIREMENTS:\nYour JSON response must adhere strictly to this schema definition:\n${JSON.stringify(req.jsonSchema)}`;
+      }
 
       messages.push({ role: "system", content: systemPrompt });
 
@@ -53,22 +58,34 @@ export const groqAdapter: AIProviderAdapter = {
       }
       messages.push({ role: "user", content: userPrompt });
 
-      const requestPayload = {
-        model: GROQ_MODEL,
-        messages,
-        response_format: { type: "json_object" },
-        temperature: 0.2,
+      let chosenModel = GROQ_MODEL;
+      let response: Response;
+
+      const callGroq = async (modelName: string) => {
+        const requestPayload = {
+          model: modelName,
+          messages,
+          response_format: { type: "json_object" },
+          temperature: 0.2,
+        };
+        return fetch(GROQ_ENDPOINT, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${key}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(requestPayload),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
       };
 
-      const response = await fetch(GROQ_ENDPOINT, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${key}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestPayload),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
+      response = await callGroq(chosenModel);
+
+      // If rate limited (429) or model temporarily unavailable, try fallback model if available
+      if ((response.status === 429 || response.status === 503) && GROQ_FALLBACK_MODEL && GROQ_FALLBACK_MODEL !== chosenModel) {
+        chosenModel = GROQ_FALLBACK_MODEL;
+        response = await callGroq(chosenModel);
+      }
 
       if (!response.ok) {
         const errorText = await readLimitedResponseText(response, 8 * 1024).catch(() => "");
@@ -93,7 +110,7 @@ export const groqAdapter: AIProviderAdapter = {
           success: false,
           rawText,
           source: "groq",
-          model: GROQ_MODEL,
+          model: chosenModel,
           latencyMs: Date.now() - startTime,
           error: "Groq structured output failed schema validation.",
         };
@@ -104,7 +121,7 @@ export const groqAdapter: AIProviderAdapter = {
         data: parsed as T,
         rawText,
         source: "groq",
-        model: GROQ_MODEL,
+        model: chosenModel,
         latencyMs: Date.now() - startTime,
       };
     } catch (err) {

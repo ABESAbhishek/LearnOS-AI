@@ -112,7 +112,7 @@ async function analyzeDocuments(documents: SourceDocument[]): Promise<NextRespon
     jsonSchema: SYLLABUS_ANALYSIS_SCHEMA,
     baselineFallback: localFallback.data,
     validator: (value): value is SyllabusAnalysisData => validateSourceGroundedSyllabusData(value, validationDocuments),
-    timeoutMs: 12000,
+    timeoutMs: 15000,
   });
 
   const providerSucceeded = aiResult.source !== "baseline" && validateSourceGroundedSyllabusData(aiResult.data, validationDocuments);
@@ -199,9 +199,14 @@ async function documentsFromFiles(files: File[]): Promise<SourceDocument[] | Nex
       const buffer = Buffer.from(await file.arrayBuffer());
       const extraction = await extractTextFromPDF(buffer);
       if (!extraction.success) {
-        return errorResponse(extraction.error?.includes("selectable text")
+        const detail = extraction.error?.includes("selectable text")
           ? "No selectable text was found. Scanned or image-only PDFs require OCR, which is not configured."
-          : "The PDF is malformed, encrypted, or could not be parsed.", 422);
+          : (extraction.error || "The PDF is malformed, encrypted, or could not be parsed.");
+        return NextResponse.json({
+          error: `${name}: ${detail}`,
+          failedFileName: name,
+          failedReason: detail,
+        }, { status: 422 });
       }
       documents.push(buildSourceDocument({
         name,
@@ -222,9 +227,19 @@ async function documentsFromFiles(files: File[]): Promise<SourceDocument[] | Nex
     try {
       text = new TextDecoder("utf-8", { fatal: true }).decode(bytes).replace(/^\uFEFF/, "").replace(/\0/g, "").trim();
     } catch {
-      return errorResponse("TXT documents must use valid UTF-8 text encoding.", 415);
+      return NextResponse.json({
+        error: `${name}: TXT documents must use valid UTF-8 text encoding.`,
+        failedFileName: name,
+        failedReason: "TXT documents must use valid UTF-8 text encoding.",
+      }, { status: 415 });
     }
-    if (text.length < 20) return errorResponse("A selected TXT file does not contain enough readable text.", 422);
+    if (text.length < 20) {
+      return NextResponse.json({
+        error: `${name}: A selected TXT file does not contain enough readable text (minimum 20 characters).`,
+        failedFileName: name,
+        failedReason: "A selected TXT file does not contain enough readable text.",
+      }, { status: 422 });
+    }
     const truncated = text.length > MAX_FILE_TEXT_CHARS;
     text = text.slice(0, MAX_FILE_TEXT_CHARS);
     documents.push(buildSourceDocument({

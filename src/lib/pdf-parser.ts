@@ -25,15 +25,26 @@ function cleanPageText(value: string): string {
     .trim();
 }
 
-/** Extracts bounded, page-preserving text; malformed and scanned PDFs remain explicit failures. */
+/** Extracts bounded, page-preserving text; malformed, encrypted, and scanned PDFs remain explicit failures. */
 export async function extractTextFromPDF(buffer: Buffer): Promise<PDFExtractionResult> {
-  if (buffer.length < 8 || buffer.subarray(0, 4).toString("ascii") !== "%PDF") {
+  if (buffer.length < 8) {
+    return { text: "", charCount: 0, pageCount: 0, pages: [], success: false, truncated: false, warnings: [], error: "The selected file is too small to be a valid PDF." };
+  }
+
+  // ISO 32000-1 §7.5.2: Header %PDF- must appear within the first 1024 bytes.
+  // Strip any leading UTF-8 BOM (\xEF\xBB\xBF), whitespace, or export headers.
+  let pdfBuffer = buffer;
+  const headerOffset = pdfBuffer.indexOf("%PDF");
+  if (headerOffset === -1 || headerOffset > 1024) {
     return { text: "", charCount: 0, pageCount: 0, pages: [], success: false, truncated: false, warnings: [], error: "The selected file does not have a valid PDF signature." };
+  }
+  if (headerOffset > 0) {
+    pdfBuffer = pdfBuffer.subarray(headerOffset);
   }
 
   let parser: PDFParse | null = null;
   try {
-    parser = new PDFParse({ data: buffer });
+    parser = new PDFParse({ data: pdfBuffer });
     const result = await parser.getText({ first: MAX_PDF_PAGES });
     const info = await parser.getInfo().catch(() => null);
     const pageCount = typeof result.total === "number" && result.total > 0 ? result.total : result.pages.length;
@@ -77,8 +88,17 @@ export async function extractTextFromPDF(buffer: Buffer): Promise<PDFExtractionR
     }
     return { text, charCount, pageCount, pages, success: true, truncated, title: metadataTitle || undefined, metadata, warnings };
   } catch (error) {
-    const detail = error instanceof Error ? error.message.slice(0, 180) : "PDF parser failed.";
-    return { text: "", charCount: 0, pageCount: 0, pages: [], success: false, truncated: false, warnings: [], error: `PDF could not be parsed. ${detail}` };
+    const rawMessage = error instanceof Error ? error.message : String(error || "");
+    const lowerMessage = rawMessage.toLowerCase();
+    let detail = "The PDF is malformed, encrypted, or could not be parsed.";
+    if (lowerMessage.includes("password") || lowerMessage.includes("encrypt") || lowerMessage.includes("decrypt")) {
+      detail = "The PDF is encrypted or password-protected. Please remove password protection before uploading.";
+    } else if (lowerMessage.includes("bad xref") || lowerMessage.includes("xref") || lowerMessage.includes("corrupt")) {
+      detail = "The PDF file structure or cross-reference table is corrupted.";
+    } else if (rawMessage) {
+      detail = `PDF could not be parsed. ${rawMessage.slice(0, 160)}`;
+    }
+    return { text: "", charCount: 0, pageCount: 0, pages: [], success: false, truncated: false, warnings: [], error: detail };
   } finally {
     if (parser) await parser.destroy().catch(() => {});
   }

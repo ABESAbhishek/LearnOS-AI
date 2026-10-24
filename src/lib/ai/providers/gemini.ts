@@ -2,7 +2,8 @@ import { GoogleGenAI, type GenerateContentConfig, type ContentListUnion } from "
 import type { AIProviderAdapter, AIProviderRequest, AIProviderResult } from "@/lib/ai/types";
 import { sanitizeErrorMessage, extractAndParseJSON } from "@/lib/ai/sanitizer";
 
-export const GEMINI_MODEL = "gemini-3.8-flash";
+export const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+export const GEMINI_FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || "gemini-3.1-flash-lite";
 
 let genAIClient: GoogleGenAI | null = null;
 
@@ -91,11 +92,28 @@ export const geminiAdapter: AIProviderAdapter = {
         contents = req.prompt ?? "";
       }
 
-      const response = await ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents,
-        config,
-      });
+      let chosenModel = GEMINI_MODEL;
+      let response;
+      try {
+        response = await ai.models.generateContent({
+          model: chosenModel,
+          contents,
+          config,
+        });
+      } catch (firstErr) {
+        const msg = String((firstErr as { message?: string })?.message || firstErr);
+        const isRecoverable = msg.includes("503") || msg.includes("UNAVAILABLE") || msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("NOT_FOUND") || msg.includes("404");
+        if (isRecoverable && GEMINI_FALLBACK_MODEL && GEMINI_FALLBACK_MODEL !== chosenModel) {
+          chosenModel = GEMINI_FALLBACK_MODEL;
+          response = await ai.models.generateContent({
+            model: chosenModel,
+            contents,
+            config,
+          });
+        } else {
+          throw firstErr;
+        }
+      }
 
       const rawText = response.text?.trim() ?? "";
       if (!rawText) {
@@ -112,7 +130,7 @@ export const geminiAdapter: AIProviderAdapter = {
           success: false,
           rawText,
           source: "gemini",
-          model: GEMINI_MODEL,
+          model: chosenModel,
           latencyMs: Date.now() - startTime,
           error: "Gemini structured output failed schema validation.",
         };
@@ -123,7 +141,7 @@ export const geminiAdapter: AIProviderAdapter = {
         data: parsed as T,
         rawText,
         source: "gemini",
-        model: GEMINI_MODEL,
+        model: chosenModel,
         latencyMs: Date.now() - startTime,
       };
     } catch (err) {

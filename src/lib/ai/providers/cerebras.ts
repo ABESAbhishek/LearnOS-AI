@@ -2,7 +2,7 @@ import type { AIProviderAdapter, AIProviderRequest, AIProviderResult } from "@/l
 import { sanitizeErrorMessage, extractAndParseJSON } from "@/lib/ai/sanitizer";
 import { readLimitedResponseJSON, readLimitedResponseText } from "@/lib/ai/response-reader";
 
-export const CEREBRAS_MODEL = "llama3.1-8b";
+export const CEREBRAS_MODEL = process.env.CEREBRAS_MODEL || "llama3.1-8b";
 const CEREBRAS_ENDPOINT = "https://api.cerebras.ai/v1/chat/completions";
 
 export const cerebrasAdapter: AIProviderAdapter = {
@@ -41,9 +41,13 @@ export const cerebrasAdapter: AIProviderAdapter = {
       const timeoutMs = req.timeoutMs ?? 10000;
       const messages: Array<{ role: "system" | "user"; content: string }> = [];
 
-      const systemPrompt = req.systemInstruction
+      let systemPrompt = req.systemInstruction
         ? `${req.systemInstruction}\n\nIMPORTANT: You must respond ONLY with a single valid, well-formed JSON object. Do not include markdown codeblocks or conversational text.`
         : "You are a precise educational AI. You must respond ONLY with a single valid, well-formed JSON object. Do not include markdown codeblocks or conversational text.";
+
+      if (req.jsonSchema) {
+        systemPrompt += `\n\nJSON SCHEMA REQUIREMENTS:\nYour JSON response must adhere strictly to this schema definition:\n${JSON.stringify(req.jsonSchema)}`;
+      }
 
       messages.push({ role: "system", content: systemPrompt });
 

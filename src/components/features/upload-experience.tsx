@@ -9,6 +9,8 @@ import { useLearning } from "@/context/learning-context";
 import { useDocuments } from "@/context/document-context";
 import type { DocumentKnowledgeRepresentation, DocumentSourceReference, SourceDocument } from "@/types/document";
 
+type MaterialStatus = "queued" | "ready" | "error";
+
 type Material = {
   id: string;
   name: string;
@@ -16,6 +18,8 @@ type Material = {
   size: string;
   file?: File;
   isSample?: boolean;
+  status?: MaterialStatus;
+  errorMessage?: string;
 };
 
 type UploadStage = "upload" | "analyzing" | "results";
@@ -27,7 +31,7 @@ const ANALYSIS_STEPS = [
 ] as const;
 
 const SAMPLE_MATERIALS: Material[] = [
-  { id: "sample-dsa-outline", name: "Built-in DSA course outline", type: "SAMPLE", size: "local demo", isSample: true },
+  { id: "sample-dsa-outline", name: "Built-in DSA course outline", type: "SAMPLE", size: "local demo", isSample: true, status: "ready" },
 ];
 const MAX_UPLOAD_FILES = 3;
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
@@ -39,12 +43,15 @@ function formatFileSize(bytes: number) {
 
 function toMaterial(file: File, index: number): Material {
   const extension = file.name.split(".").pop()?.toUpperCase() || "FILE";
+  const isZeroByte = file.size === 0;
   return {
     id: `${file.name}-${file.lastModified}-${Date.now()}-${index}`,
     name: file.name,
     type: extension,
     size: formatFileSize(file.size),
     file,
+    status: isZeroByte ? "error" : "queued",
+    errorMessage: isZeroByte ? "The selected file is empty (0 bytes)." : undefined,
   };
 }
 
@@ -250,6 +257,7 @@ export function UploadExperience() {
           setStage("upload");
           return;
         }
+        setMaterials((current) => current.map((m) => ({ ...m, status: "ready", errorMessage: undefined })));
         setDocumentKnowledge(data.knowledge ?? data.data?.documentKnowledge ?? null);
         if (Array.isArray(data.documents) && data.documents.length > 0) addDocuments(data.documents);
         setCourseAnalysis({
@@ -263,7 +271,20 @@ export function UploadExperience() {
         setStage("results");
       } else {
         const errData = await response.json().catch(() => ({}));
-        setUploadError(errData.error || "Analysis service unavailable. Your current profile is unchanged.");
+        const serverError = errData.error || "Analysis service unavailable. Your current profile is unchanged.";
+        setUploadError(serverError);
+        const failedFileName = errData.failedFileName;
+        const failedReason = errData.failedReason || serverError;
+
+        setMaterials((current) => current.map((item) => {
+          const isFailed = failedFileName
+            ? (item.name === failedFileName || item.file?.name === failedFileName)
+            : serverError.toLowerCase().includes(item.name.toLowerCase());
+          if (isFailed) {
+            return { ...item, status: "error", errorMessage: failedReason };
+          }
+          return { ...item, status: "queued" };
+        }));
         setStage("upload");
       }
     } catch {
@@ -363,22 +384,61 @@ export function UploadExperience() {
               <div className="motion-reveal motion-reveal--node mt-6" data-motion-reveal>
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <SectionLabel>Added materials / {String(materials.length).padStart(2, "0")}</SectionLabel>
-                  <span className="text-[10px] text-muted">Ready for LearnOS analysis</span>
+                  <span className={`text-[10px] ${materials.some((m) => m.status === "error") ? "font-medium text-red-600 dark:text-red-400" : "text-muted"}`}>
+                    {materials.some((m) => m.status === "error")
+                      ? "Action needed: remove unreadable file(s)"
+                      : materials.some((m) => m.status === "ready")
+                      ? "Extracted and ready for LearnOS"
+                      : "Ready for LearnOS analysis"}
+                  </span>
                 </div>
                 <ul className="grid gap-2" aria-label="Added learning materials">
                   {materials.map((material, index) => (
                     <li
                       key={material.id}
-                      className="motion-reveal motion-reveal--plan-item flex min-w-0 items-center gap-3 rounded-xl border border-border bg-white/35 px-3 py-3"
+                      className={`motion-reveal motion-reveal--plan-item flex min-w-0 items-center gap-3 rounded-xl border px-3 py-3 transition-colors ${
+                        material.status === "error"
+                          ? "border-red-500/30 bg-red-500/5"
+                          : material.status === "ready"
+                          ? "border-emerald-500/30 bg-emerald-500/5"
+                          : "border-border bg-white/35"
+                      }`}
                       data-motion-reveal
                       style={{ "--reveal-delay": `${index * 65}ms` } as CSSProperties}
                     >
-                      <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-background text-accent"><FileText aria-hidden="true" size={16} /></span>
+                      <span className={`grid size-9 shrink-0 place-items-center rounded-lg ${
+                        material.status === "error"
+                          ? "bg-red-500/10 text-red-600 dark:text-red-400"
+                          : material.status === "ready"
+                          ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                          : "bg-background text-accent"
+                      }`}>
+                        <FileText aria-hidden="true" size={16} />
+                      </span>
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm font-medium">{material.name}</span>
-                        <span className="mt-0.5 block text-[10px] text-muted">{material.type} <span className="px-1 text-border">/</span> {material.size}</span>
+                        <span className="mt-0.5 block text-[10px] text-muted">
+                          {material.type} <span className="px-1 text-border">/</span> {material.size}
+                          {material.status === "error" && material.errorMessage && (
+                            <span className="mt-1 block font-normal text-red-600 dark:text-red-400">
+                              {material.errorMessage}
+                            </span>
+                          )}
+                        </span>
                       </span>
-                      <span className="shrink-0 rounded-md bg-accent-soft/70 px-2 py-1 text-[9px] font-medium text-accent">Ready</span>
+                      {material.status === "error" ? (
+                        <span className="shrink-0 rounded-md bg-red-500/15 px-2 py-1 text-[9px] font-medium text-red-600 dark:text-red-400">
+                          Error
+                        </span>
+                      ) : material.status === "ready" ? (
+                        <span className="shrink-0 rounded-md bg-emerald-500/15 px-2 py-1 text-[9px] font-medium text-emerald-700 dark:text-emerald-400">
+                          Ready
+                        </span>
+                      ) : (
+                        <span className="shrink-0 rounded-md bg-accent-soft/70 px-2 py-1 text-[9px] font-medium text-accent">
+                          Queued
+                        </span>
+                      )}
                       <button
                         type="button"
                         onClick={() => removeMaterial(material.id)}
@@ -394,11 +454,17 @@ export function UploadExperience() {
             )}
 
             <div className="mt-6 flex flex-col gap-3 border-t border-border pt-5 sm:flex-row sm:items-center sm:justify-between">
-              <span className="text-xs text-muted">{materials.length ? `${materials.length} ${materials.length === 1 ? "material" : "materials"} ready for LearnOS` : "Start with a syllabus, notes or past questions."}</span>
+              <span className="text-xs text-muted">
+                {materials.length
+                  ? materials.some((m) => m.status === "error")
+                    ? "Remove failed file(s) before analyzing"
+                    : `${materials.length} ${materials.length === 1 ? "material" : "materials"} ready for LearnOS`
+                  : "Start with a syllabus, notes or past questions."}
+              </span>
               <button
                 type="button"
                 className="button-primary interactive inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-foreground px-4 text-sm font-medium text-background hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
-                disabled={materials.length === 0}
+                disabled={materials.length === 0 || materials.every((m) => m.status === "error") || stage === "analyzing"}
                 onClick={startAnalysis}
               >
                 Analyze with LearnOS <ArrowRight aria-hidden="true" size={15} />

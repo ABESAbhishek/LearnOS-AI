@@ -1,10 +1,11 @@
 import { GoogleGenAI, type GenerateContentConfig, type ContentListUnion, Type } from "@google/genai";
 
 /**
- * Pinned Gemini model for reproducible hackathon execution.
- * Stable model: gemini-3.8-flash
+ * Pinned Gemini model for reproducible hackathon execution with flexible environment override.
+ * Stable default: gemini-3.8-flash, with automatic fallback to gemini-3.1-flash-lite on transient/quota spikes.
  */
-export const GEMINI_MODEL = "gemini-3.8-flash";
+export const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+export const GEMINI_FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || "gemini-3.1-flash-lite";
 
 export type AISource = "gemini" | "baseline";
 
@@ -79,7 +80,7 @@ export function getGeminiClient(): GoogleGenAI | null {
  * Executes a structured Gemini generation using JSON schema output.
  * If Gemini is not configured, or if the request fails, or if validation fails,
  * it returns the deterministic baselineFallback with source: "baseline".
- * Uses a strict 10s timeout and at most 1 short retry for transient 503s.
+ * Uses a strict 10s timeout and bounded retry / fallback model.
  */
 export async function generateStructuredWithFallback<T>({
   prompt,
@@ -122,7 +123,7 @@ export async function generateStructuredWithFallback<T>({
     };
   }
 
-  const attemptCall = async (): Promise<T> => {
+  const attemptCall = async (modelName: string): Promise<T> => {
     const config: GenerateContentConfig = {
       responseMimeType: "application/json",
       abortSignal: AbortSignal.timeout(10000), // Strict 10-second bound
@@ -137,7 +138,7 @@ export async function generateStructuredWithFallback<T>({
     }
 
     const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
+      model: modelName,
       contents: inputContents,
       config,
     });
@@ -156,27 +157,27 @@ export async function generateStructuredWithFallback<T>({
     return parsed as T;
   };
 
+  let chosenModel = GEMINI_MODEL;
   try {
     try {
-      const data = await attemptCall();
+      const data = await attemptCall(chosenModel);
       return {
         data,
         source: "gemini",
-        model: GEMINI_MODEL,
+        model: chosenModel,
         latencyMs: Date.now() - startTime,
       };
     } catch (firstErr: unknown) {
       const errMsg = String((firstErr as { message?: string })?.message || firstErr);
-      const isTransient503 = errMsg.includes("503") || errMsg.includes("UNAVAILABLE");
+      const isRecoverable = errMsg.includes("503") || errMsg.includes("UNAVAILABLE") || errMsg.includes("429") || errMsg.includes("RESOURCE_EXHAUSTED") || errMsg.includes("NOT_FOUND") || errMsg.includes("404");
 
-      // Attempt at most 1 short bounded retry if 503 transient spike
-      if (isTransient503) {
-        await new Promise((resolve) => setTimeout(resolve, 800));
-        const data = await attemptCall();
+      if (isRecoverable && GEMINI_FALLBACK_MODEL && GEMINI_FALLBACK_MODEL !== chosenModel) {
+        chosenModel = GEMINI_FALLBACK_MODEL;
+        const data = await attemptCall(chosenModel);
         return {
           data,
           source: "gemini",
-          model: GEMINI_MODEL,
+          model: chosenModel,
           latencyMs: Date.now() - startTime,
         };
       }
@@ -188,7 +189,7 @@ export async function generateStructuredWithFallback<T>({
     return {
       data: baselineFallback,
       source: "baseline",
-      model: GEMINI_MODEL,
+      model: chosenModel,
       latencyMs: Date.now() - startTime,
       error: sanitized,
     };
@@ -223,32 +224,49 @@ export async function testGeminiConnection(): Promise<GeminiTestResponse> {
       throw new Error("Failed to instantiate GoogleGenAI client");
     }
 
-    const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
-      contents:
-        "Return a JSON object with keys 'status' (string: 'ok'), 'service' (string: 'LearnOS AI Gemini Service'), and 'timestamp' (string ISO date).",
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            status: { type: Type.STRING },
-            service: { type: Type.STRING },
-            timestamp: { type: Type.STRING },
+    let chosenModel = GEMINI_MODEL;
+    const callTest = async (modelName: string) => {
+      return ai.models.generateContent({
+        model: modelName,
+        contents:
+          "Return a JSON object with keys 'status' (string: 'ok'), 'service' (string: 'LearnOS AI Gemini Service'), and 'timestamp' (string ISO date).",
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              status: { type: Type.STRING },
+              service: { type: Type.STRING },
+              timestamp: { type: Type.STRING },
+            },
+            required: ["status", "service", "timestamp"],
           },
-          required: ["status", "service", "timestamp"],
         },
-      },
-    });
+      });
+    };
+
+    let response;
+    try {
+      response = await callTest(chosenModel);
+    } catch (firstErr) {
+      const errMsg = String((firstErr as { message?: string })?.message || firstErr);
+      const isRecoverable = errMsg.includes("503") || errMsg.includes("UNAVAILABLE") || errMsg.includes("429") || errMsg.includes("RESOURCE_EXHAUSTED") || errMsg.includes("NOT_FOUND") || errMsg.includes("404");
+      if (isRecoverable && GEMINI_FALLBACK_MODEL && GEMINI_FALLBACK_MODEL !== chosenModel) {
+        chosenModel = GEMINI_FALLBACK_MODEL;
+        response = await callTest(chosenModel);
+      } else {
+        throw firstErr;
+      }
+    }
 
     const parsed = JSON.parse(response.text || "{}");
 
     return {
       configured: true,
       source: "gemini",
-      model: GEMINI_MODEL,
+      model: chosenModel,
       latencyMs: Date.now() - startTime,
-      message: `Successfully connected to Gemini API with model ${GEMINI_MODEL}.`,
+      message: `Successfully connected to Gemini API with model ${chosenModel}.`,
       sampleOutput: parsed,
     };
   } catch (err) {
